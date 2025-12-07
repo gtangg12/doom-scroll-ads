@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import random
 import sys
@@ -28,7 +29,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from das.ad_generation_dataclasses import Video as AdVideo, UserReaction, Product
+from das.ad_generation_dataclasses import (
+    Video as AdVideo,
+    UserReaction,
+    Product,
+    User,
+    build_user_from_stats,
+    MIN_SECONDS_FOR_CONTEXT,
+)
 
 
 @dataclass
@@ -39,6 +47,9 @@ class VideoState:
     seconds_watched: float = 0.0
     reaction: UserReaction = field(default_factory=UserReaction)
     is_ad: bool = False  # True for generated ad videos, False for organic videos
+    # Whether this video has already been appended to the in-memory User
+    # context for this session.
+    context_appended: bool = False
 
 
 @dataclass
@@ -133,6 +144,14 @@ class ScrollWindow(QMainWindow):
         self._current_started_at: Optional[float] = None
         # Optional path where per-video user stats are persisted across sessions.
         self._stats_path: Optional[Path] = stats_path
+
+        # In-memory User object that mirrors the stats JSON. We build it once
+        # from the existing stats file (if any), then keep it incrementally
+        # updated as the user watches / likes / shares videos.
+        if self._stats_path is not None:
+            self._user: User = build_user_from_stats(self._stats_path)
+        else:
+            self._user = User()
 
         # Preload available products once; ad generation will happen on a
         # background worker using this pool and product list.
@@ -617,6 +636,8 @@ class ScrollWindow(QMainWindow):
         idx = self.current_index + 1
         total = len(self.video_states)
         self.meta_label.setText(f"{idx:02d}/{total:02d}  ·  {total_watched:4.1f}s watched")
+        self._update_ui_from_state()
+        self._maybe_append_current_video_to_user()
 
     # ---- Background ad generation -----------------------------------------
 
@@ -641,12 +662,13 @@ class ScrollWindow(QMainWindow):
 
     def _generate_ad_for_current_user(self) -> AdVideo:
         """Worker function executed in a background thread."""
-        from das.ad_generation_dataclasses import build_user_from_stats
         from das.ad_generation import generate_ad
 
-        print("[ADS][worker] Starting ad generation...")
-        user = build_user_from_stats()
-        ad_video = generate_ad(user, self._products)
+        # Take a snapshot of the current in-memory User so ad generation sees a
+        # stable view of behaviour up to this point, without re-reading JSON.
+        print("[ADS][worker] Starting ad generation for current user...")
+        user_snapshot = copy.deepcopy(self._user)
+        ad_video = generate_ad(user_snapshot, self._products)
         print(f"[ADS][worker] Ad generation completed: {ad_video.path}")
         return ad_video
 
@@ -727,6 +749,7 @@ class ScrollWindow(QMainWindow):
         self.current_video.reaction.heart = checked
         self._update_ui_from_state()
         self._persist_state()
+        self._maybe_append_current_video_to_user()
 
     def _on_share_clicked(self, checked: bool) -> None:
         # When turning "share" on, open X, then flip the underlying reaction
@@ -736,6 +759,7 @@ class ScrollWindow(QMainWindow):
         self.current_video.reaction.share = checked
         self._update_ui_from_state()
         self._persist_state()
+        self._maybe_append_current_video_to_user()
 
     def _share_on_x(self) -> None:
         """Open X (Twitter) share intent in the default browser."""
@@ -762,6 +786,7 @@ class ScrollWindow(QMainWindow):
             self.current_video.seconds_watched += elapsed
         self._current_started_at = None
         self._persist_state()
+        self._maybe_append_current_video_to_user()
 
     def _update_ui_from_state(self) -> None:
         # Meta
@@ -785,6 +810,33 @@ class ScrollWindow(QMainWindow):
             self.share_button.blockSignals(False)
 
         # Sticker label is no longer shown; we keep engagement tracking only.
+
+    def _maybe_append_current_video_to_user(self) -> None:
+        """Append the current video to the in-memory User when it "matters".
+
+        A video is considered meaningful for long-term user context if:
+        - it has been watched for at least MIN_SECONDS_FOR_CONTEXT seconds, or
+        - it has explicit engagement (like or share).
+        """
+        state = self.current_video
+
+        # Never let ads influence the user preference model.
+        if state.is_ad:
+            return
+
+        # Only append once per video per session.
+        if state.context_appended:
+            return
+
+        if (
+            state.seconds_watched >= MIN_SECONDS_FOR_CONTEXT
+            or state.reaction.heart
+            or state.reaction.share
+        ):
+            # Append the shared Video / UserReaction objects so future UI
+            # toggles (like/share) keep the User's history in sync.
+            self._user.append_video(state.video, state.reaction)
+            state.context_appended = True
 
     # ---- Lifecycle -------------------------------------------------------
 

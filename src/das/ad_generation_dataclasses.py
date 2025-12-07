@@ -15,6 +15,9 @@ from das.utils import create_chat, encode_base64
 USER_VIDEO_MEMORY_LIMIT = 50
 PRODUCT_IMAGE_RESIZE_DIM = (1024, 1024)
 DEFAULT_USER_STATS_PATH = Path("assets/logs/user.json")
+# Minimum watch time (in seconds) for a video to be considered part of the
+# user's context, unless it has explicit engagement (like/share).
+MIN_SECONDS_FOR_CONTEXT = 5.0
 
 
 @dataclass
@@ -106,8 +109,9 @@ class User:
 def build_user_from_stats(stats_path: Path | str = DEFAULT_USER_STATS_PATH) -> User:
     """Reconstruct a User from the JSON stats file written by the scroll UI.
 
-    This is intended for the "many ads" case: you call this once after a scroll
-    session, then reuse the resulting User for multiple ad generations.
+    A video contributes to the resulting User's context if either:
+    - it has at least MIN_SECONDS_FOR_CONTEXT seconds of watch time, or
+    - it has explicit engagement (heart or share).
     """
     stats_path = Path(stats_path)
     if not stats_path.exists():
@@ -140,6 +144,13 @@ def build_user_from_stats(stats_path: Path | str = DEFAULT_USER_STATS_PATH) -> U
         share = bool(entry.get("share", False))
         seconds_watched = float(entry.get("seconds_watched", 0.0))
         reaction = UserReaction(heart=heart, share=share, seconds_watched=seconds_watched)
+
+        # Skip videos that don't meet the minimum watch time and had no
+        # engagement; they shouldn't influence the user's long-term context.
+        if seconds_watched < MIN_SECONDS_FOR_CONTEXT and not (heart or share):
+            continue
+
+        reaction = UserReaction(heart=heart, share=share)
         user.append_video(video, reaction)
 
     return user
