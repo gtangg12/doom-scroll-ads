@@ -10,7 +10,7 @@ from xai_sdk import Client
 from xai_sdk.chat import system as chat_system
 
 
-def create_chat(prompt_filename: Path | str, model='grok-4', timeout=3600):
+def create_chat(prompt_filename: Path | str, model='grok-4', tools: Optional[list]=None, timeout=3600):
     """ Create Grok chat with system prompt from `prompt_filename`
     """
     with open(prompt_filename, 'r') as f:
@@ -19,7 +19,10 @@ def create_chat(prompt_filename: Path | str, model='grok-4', timeout=3600):
         api_key=os.getenv("XAI_API_KEY"),
         timeout=timeout,
     )
-    chat = client.chat.create(model=model)
+    chat = client.chat.create(
+        model=model,
+        tools=tools,
+    )
     chat.append(chat_system(prompt))
     return chat
 

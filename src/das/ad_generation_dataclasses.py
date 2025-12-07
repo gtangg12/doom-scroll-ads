@@ -8,6 +8,7 @@ import json
 
 from PIL import Image
 from xai_sdk.chat import user as chat_user, image as chat_image
+from xai_sdk.tools import web_search as chat_web_search, x_search as chat_x_search
 
 from das.utils import create_chat, encode_base64
 
@@ -56,14 +57,16 @@ class Product:
 
         image = Image.open(self.path)
         image.thumbnail(PRODUCT_IMAGE_RESIZE_DIM)
-        image.show()
-        chat = create_chat('assets/prompts/extract_context_product.txt')
+        chat = create_chat(
+            'assets/prompts/extract_context_product.txt',
+            model='grok-4-1-fast',
+        )
         chat.append(chat_user(chat_image(encode_base64(image))))
-        response = chat.sample().content
+        response = chat.sample()
 
         with open(caption_path, 'w') as f:
-            f.write(response)
-        return response
+            f.write(response.content)
+        return response.content
 
 
 @dataclass
@@ -96,9 +99,9 @@ class User:
 
         chat = create_chat('assets/prompts/extract_context_user.txt')
         chat.append(chat_user(contexts_combined))
-        response = chat.sample().content
-        self.cached_context = response
-        return response
+        response = chat.sample()
+        self.cached_context = response.content
+        return response.content
 
     def append_video(self, video: Video, user_reaction: UserReaction):
         self.videos_watched.append(video)
