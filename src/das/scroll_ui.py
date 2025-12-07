@@ -636,7 +636,8 @@ class ScrollWindow(QMainWindow):
         idx = self.current_index + 1
         total = len(self.video_states)
         self.meta_label.setText(f"{idx:02d}/{total:02d}  ·  {total_watched:4.1f}s watched")
-        self._update_ui_from_state()
+        
+        # Check if video now qualifies for user context (but don't call full UI update)
         self._maybe_append_current_video_to_user()
 
     # ---- Background ad generation -----------------------------------------
