@@ -8,6 +8,7 @@ from PIL import Image
 from xai_sdk.chat import user as chat_user
 
 from das.ad_generation_dataclasses import PRODUCT_IMAGE_RESIZE_DIM, Video, User, Product
+from das.ad_performance import AdPerformanceStore
 from das.utils import create_chat, encode_base64, generate_image
 
 
@@ -29,10 +30,14 @@ def _slugify(text: str) -> str:
     return text or "unknown"
 
 
-def generate_ad(user: User, products: list[Product], edit=True) -> Video:
+def generate_ad(
+    user: User,
+    products: list[Product],
+    edit: bool = True,
+) -> Video:
     # NOTE queue worker for this function and let user keep scrolling until ad is ready
 
-    # TODO replace with recommendation system
+    # TODO replace with a richer recommendation system dependent on user context, or using simple historical performance metrics.
     prod = random.choice(products)
 
     user_context = user.context  # key phrase describing the user profile
@@ -58,7 +63,7 @@ def generate_ad(user: User, products: list[Product], edit=True) -> Video:
     # If we've already generated this exact ad before, reuse the cached video.
     if video_path.exists():
         logging.info("Reusing cached ad video at %s", video_path)
-        return Video(path=video_path)
+        return Video(path=video_path, product_path=prod.path)
 
     # If the image exists but the video does not, reuse the image for video creation.
     if image_path.exists():
@@ -81,7 +86,7 @@ def generate_ad(user: User, products: list[Product], edit=True) -> Video:
         .run(quiet=True)
     )
 
-    return Video(path=video_path)
+    return Video(path=video_path, product_path=prod.path)
 
 
 if __name__ == '__main__':

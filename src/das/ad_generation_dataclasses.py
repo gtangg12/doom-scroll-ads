@@ -24,6 +24,9 @@ MIN_SECONDS_FOR_CONTEXT = 5.0
 @dataclass
 class Video:
     path: Path
+    # Optional pointer back to the underlying product for generated ads.
+    # For organic (non-ad) videos this will be None.
+    product_path: Optional[Path] = None
 
     @cached_property
     def context(self) -> str:

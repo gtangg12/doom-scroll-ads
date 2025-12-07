@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import random
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -37,6 +38,7 @@ from das.ad_generation_dataclasses import (
     build_user_from_stats,
     MIN_SECONDS_FOR_CONTEXT,
 )
+from das.ad_performance import AdPerformanceStore
 
 
 @dataclass
@@ -162,6 +164,22 @@ class ScrollWindow(QMainWindow):
         # Count of organic (non-ad) videos the user has scrolled through since
         # the last inserted ad. Used to place an ad after every N organic views.
         self._organic_views_since_last_ad: int = 0
+
+        # Aggregate performance metrics for generated ads; used both for
+        # tracking outcomes (watch time / engagement) and for biasing future
+        # product selection in ad generation.
+        self._ad_performance_store: AdPerformanceStore = AdPerformanceStore.load()
+
+        # Pre-populate the ad cache with any already-generated ads on disk so
+        # the UI starts with a rich set of creatives even before the first
+        # background generation job completes.
+        cached_ads_dir = Path("assets/videos_generated")
+        cached_ads = _collect_cached_ads(cached_ads_dir, self._products)
+        if cached_ads:
+            self._ad_cache.extend(cached_ads)
+            print(
+                f"[ADS] Preloaded {len(cached_ads)} cached ad videos from {cached_ads_dir}"
+            )
 
         # Background ad-generation executor + polling timer so we never block
         # the UI thread while calling the LLM or ffmpeg.
@@ -652,6 +670,17 @@ class ScrollWindow(QMainWindow):
         This runs entirely off the UI thread via a ThreadPoolExecutor so that
         users can keep scrolling with zero lag while the ad is being prepared.
         """
+        # Keep the ad cache near a target size; only generate more when the
+        # number of ready-to-insert ads falls below this threshold.
+        TARGET_CACHE_SIZE = 5
+        current_cache_size = len(self._ad_cache)
+        if current_cache_size >= TARGET_CACHE_SIZE:
+            print(
+                "[ADS] Ad cache at or above target size "
+                f"({current_cache_size}/{TARGET_CACHE_SIZE}); "
+                "not queuing additional ad generation."
+            )
+            return
         if self._ad_future is not None and not self._ad_future.done():
             print("[ADS] Ad generation already in progress; not queuing another.")
             return
@@ -725,6 +754,10 @@ class ScrollWindow(QMainWindow):
         self._organic_views_since_last_ad = 0
         print(f"[ADS] Inserted ad after index {self.current_index}, total videos now {len(self.video_states)}.")
 
+        # After consuming an ad, we may have dropped the cache below the target
+        # size; attempt to queue a new generation task if appropriate.
+        self._ensure_ad_queued()
+
     def _go_next(self) -> None:
         self._commit_watch_time()
         self.current_index = (self.current_index + 1) % len(self.video_states)
@@ -788,7 +821,25 @@ class ScrollWindow(QMainWindow):
             return
         elapsed = time.monotonic() - self._current_started_at
         if elapsed > 0:
-            self.current_video.seconds_watched += elapsed
+            state = self.current_video
+            state.seconds_watched += elapsed
+
+            # If this is an ad, treat this as one "impression" and record basic
+            # performance metrics about how it did before the user scrolled
+            # away (watch time + engagement flags).
+            if state.is_ad and state.video.product_path is not None:
+                try:
+                    self._ad_performance_store.record_impression(
+                        str(state.video.product_path),
+                        seconds_watched=elapsed,
+                        liked=state.reaction.heart,
+                        shared=state.reaction.share,
+                        autosave=True,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    # Never let metrics tracking interfere with the scroll UX.
+                    print(f"[ADS][metrics] Failed to record ad performance: {exc!r}")
+
         self._current_started_at = None
         self._persist_state()
         self._maybe_append_current_video_to_user()
@@ -867,6 +918,38 @@ class ScrollWindow(QMainWindow):
                 f"- {state.video.path.name:30s}  |  {kind}  |  watched {state.seconds_watched:5.1f}s  |  heart={heart} share={share}"
             )
 
+        # Aggregate ad performance by underlying product, restricted to ads
+        # that were actually seen this session so the summary stays focused.
+        seen_product_paths: set[str] = set()
+        for state in self.video_states:
+            if state.is_ad and state.video.product_path is not None:
+                seen_product_paths.add(str(state.video.product_path))
+
+        if not seen_product_paths:
+            print("\n=== Ad Performance Summary ===")
+            print("No ad impressions with linked products were recorded this session.")
+            return
+
+        all_metrics = self._ad_performance_store.metrics_for_debug()
+        print("\n=== Ad Performance Summary (by product) ===")
+        for product_path_str in sorted(seen_product_paths):
+            metric = all_metrics.get(product_path_str)
+            if metric is None:
+                continue
+
+            engagement_score = self._ad_performance_store.score(
+                product_path_str, objective="engagement"
+            )
+            # Show only the basename for readability.
+            product_name = Path(product_path_str).name
+            print(
+                f"- {product_name:30s}  |  impressions={metric.impressions:3d}  "
+                f"|  avg_watch={metric.avg_watch_seconds:4.1f}s  "
+                f"|  like_rate={metric.like_rate:.2%}  "
+                f"|  share_rate={metric.share_rate:.2%}  "
+                f"|  engagement_score={engagement_score:.4f}"
+            )
+
 
 def _select_directory(parent: QWidget | None = None) -> Optional[Path]:
     directory = QFileDialog.getExistingDirectory(
@@ -904,6 +987,53 @@ def _collect_products(directory: Path) -> List[Product]:
         if p.suffix.lower() in exts and p.is_file():
             products.append(Product(path=p))
     return products
+
+
+def _slugify_name(text: str) -> str:
+    """Mirror the slugification used for generated ad filenames."""
+    text = text.lower().strip()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    text = text.strip("-")
+    return text or "unknown"
+
+
+def _collect_cached_ads(directory: Path, products: Sequence[Product]) -> List[AdVideo]:
+    """Collect already-generated ad videos from disk to seed the ad cache.
+
+    We also attempt to infer the originating Product from the filename so that
+    performance metrics can be correctly attributed when these cached ads are
+    shown in the UI.
+    """
+    if not directory.exists():
+        return []
+
+    # Build a lookup table from slugified product name → product.path
+    product_by_slug: dict[str, Path] = {}
+    for prod in products:
+        slug = _slugify_name(prod.path.stem)
+        product_by_slug[slug] = prod.path
+
+    exts = {".mp4", ".mov", ".m4v", ".avi", ".mkv"}
+    ads: List[AdVideo] = []
+    for p in directory.iterdir():
+        if p.suffix.lower() not in exts or not p.is_file():
+            continue
+
+        # Generated ads follow the pattern "<product-slug>__<user-profile-slug>.ext".
+        # We recover the product slug and map it back to a Product if possible.
+        stem = p.stem
+        product_slug = stem.split("__", 1)[0]
+        product_path = product_by_slug.get(product_slug)
+
+        if product_path is not None:
+            ads.append(AdVideo(path=p, product_path=product_path))
+        else:
+            # Fallback: keep the ad but without a product pointer; it will not
+            # contribute to performance metrics but is still playable.
+            ads.append(AdVideo(path=p))
+
+    random.shuffle(ads)
+    return ads
 
 
 def run_scroll_ui(video_dir: Optional[Path] = None) -> None:
