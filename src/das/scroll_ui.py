@@ -155,6 +155,9 @@ class ScrollWindow(QMainWindow):
         ]
         self.current_index: int = 0
         self._current_started_at: Optional[float] = None
+        
+        # Track failed video indices to avoid infinite skip loops
+        self._failed_indices: set[int] = set()
 
         # In-memory User object tracking watch history for ad generation.
         self._user = User()
@@ -219,6 +222,59 @@ class ScrollWindow(QMainWindow):
         # size hints from the underlying media. This prevents the card from
         # subtly resizing when videos have different resolutions/aspect ratios.
         self.video_widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        
+        # Connect error handling signals to detect failed video loads
+        self.player.errorOccurred.connect(self._on_media_error)
+        
+        # Monitor actual frame delivery via the widget's video sink
+        self._frame_received = False
+        self.video_widget.videoSink().videoFrameChanged.connect(self._on_frame_received)
+        
+        # Timeout to detect "loaded but black" videos (codec failures, unsupported formats)
+        self._frame_check_timer = QTimer(self)
+        self._frame_check_timer.setSingleShot(True)
+        self._frame_check_timer.timeout.connect(self._on_no_frames)
+
+    def _on_media_error(self, error: QMediaPlayer.Error, error_string: str) -> None:
+        """Handle explicit media player errors."""
+        if error == QMediaPlayer.Error.NoError:
+            return
+        path = self.current_video.video.path
+        print(f"[VIDEO] Media error for {path.name}: {error_string}")
+        self._frame_check_timer.stop()
+        self._failed_indices.add(self.current_index)
+        QTimer.singleShot(100, self._skip_failed_video)
+
+    def _on_frame_received(self, frame) -> None:
+        """Called when a video frame is delivered."""
+        if frame.isValid() and not self._frame_received:
+            self._frame_received = True
+            self._frame_check_timer.stop()
+
+    def _on_no_frames(self) -> None:
+        """Called if no valid frames received within timeout - video is broken."""
+        if not self._frame_received:
+            path = self.current_video.video.path
+            print(f"[VIDEO] No frames received, skipping: {path.name}")
+            self._failed_indices.add(self.current_index)
+            self._skip_failed_video()
+
+    def _skip_failed_video(self) -> None:
+        """Skip to the next valid video after a load failure."""
+        if len(self._failed_indices) >= len(self.video_states):
+            QMessageBox.critical(
+                self,
+                "No playable videos",
+                "All videos failed to load. Please check the video files.",
+            )
+            return
+        
+        # Find next non-failed video
+        for _ in range(len(self.video_states)):
+            self.current_index = (self.current_index + 1) % len(self.video_states)
+            if self.current_index not in self._failed_indices:
+                self._load_current_video()
+                return
 
     # ---- UI setup --------------------------------------------------------
 
@@ -651,6 +707,7 @@ class ScrollWindow(QMainWindow):
         self._ensure_ad_queued()
 
     def _go_next(self) -> None:
+        self._frame_check_timer.stop()
         self._commit_watch_time()
         self.current_index = (self.current_index + 1) % len(self.video_states)
         self._load_current_video()
@@ -659,6 +716,7 @@ class ScrollWindow(QMainWindow):
             self._maybe_insert_ad_after_current()
 
     def _go_prev(self) -> None:
+        self._frame_check_timer.stop()
         self._commit_watch_time()
         self.current_index = (self.current_index - 1) % len(self.video_states)
         self._load_current_video()
@@ -711,6 +769,10 @@ class ScrollWindow(QMainWindow):
     # ---- Video loading & state sync --------------------------------------
 
     def _load_current_video(self) -> None:
+        # Reset frame check for new video
+        self._frame_received = False
+        self._frame_check_timer.start(1500)  # 1.5s to receive a valid frame
+        
         path = self.current_video.video.path
         self.player.setSource(QUrl.fromLocalFile(str(path)))
         self.player.play()
@@ -818,6 +880,7 @@ class ScrollWindow(QMainWindow):
     # ---- Lifecycle -------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        self._frame_check_timer.stop()
         self._commit_watch_time()
         if hasattr(self, "_ui_update_timer"):
             self._ui_update_timer.stop()
