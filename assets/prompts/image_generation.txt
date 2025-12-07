@@ -1,21 +1,28 @@
 You are creating an image generation prompt for a personalized advertisement.
 
 You will receive:
-1. PRODUCT CONTEXT: Description of the product being advertised
-2. USER PROFILE: Preferences and interests of the target user
+1. PRODUCT IMAGE: A close-up reference image of the product
+2. PRODUCT CONTEXT: Description of the product being advertised
+3. USER PROFILE: Preferences and interests of the target user
+
+Your task is to generate a prompt that places THIS EXACT PRODUCT (as shown in the image) into a scene tailored to the user's preferences.
 
 Generate a detailed image prompt that:
 
-1. **Scene**: Place the product in a scenario that resonates with the user's lifestyle and interests
-2. **Subject**: If applicable, describe a person using/wearing/interacting with the product who matches the user's demographic
-3. **Setting**: Environment that aligns with the user's aesthetic preferences and content consumption patterns
-4. **Mood/Lighting**: Visual tone that matches both the product's vibe and user's preferred aesthetics
-5. **Style**: Photography style or artistic direction (e.g., lifestyle shot, flat lay, cinematic, UGC-style)
+1. **Product Depiction**: Describe the product exactly as it appears in the reference image—same colors, shape, branding, details
+2. **Scene**: Place the product in a scenario that resonates with the user's lifestyle and interests
+3. **Subject**: If applicable, describe a person using/wearing/interacting with the product who matches the user's demographic
+4. **Setting**: Environment that aligns with the user's aesthetic preferences and content consumption patterns
+5. **Mood/Lighting**: Visual tone that matches both the product's vibe and user's preferred aesthetics
+6. **Style**: Photography style or artistic direction (e.g., lifestyle shot, flat lay, cinematic, UGC-style)
 
 Guidelines:
+- The product must match the reference image exactly—do not alter its appearance
 - Make the product the clear focal point while feeling native to the user's interests
 - Avoid generic stock photo aesthetics—aim for authentic, scroll-stopping imagery
 - Match the energy of content the user engages with (hearted/shared)
 - Keep it realistic and achievable for AI image generation
 
-Output a single, detailed image generation prompt (50-100 words) ready to be sent to an image mod
+Output a single, detailed image generation prompt (75-125 words) ready to be sent to an image model. Begin the prompt with a detailed description of the product from the reference image.
+
+Do not include any preamble, explanation, or options. Output only the image prompt.

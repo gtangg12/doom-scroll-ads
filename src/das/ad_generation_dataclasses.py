@@ -11,7 +11,7 @@ from das.utils import create_chat, encode_base64
 
 
 USER_VIDEO_MEMORY_LIMIT = 50
-PRODUCT_IMAGE_RESIZE_DIM = (512, 512)
+PRODUCT_IMAGE_RESIZE_DIM = (1024, 1024)
 
 
 @dataclass
@@ -43,7 +43,7 @@ class Product:
         image.thumbnail(PRODUCT_IMAGE_RESIZE_DIM)
         image.show()
         chat = create_chat('assets/prompts/extract_context_product.txt')
-        chat.append(chat_user(chat_image(f"data:image/png;base64,{encode_base64(image)}")))
+        chat.append(chat_user(chat_image(encode_base64(image))))
         response = chat.sample().content
 
         with open(caption_path, 'w') as f:

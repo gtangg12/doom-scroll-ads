@@ -4,10 +4,11 @@ import uuid
 from pathlib import Path
 
 import ffmpeg
+from PIL import Image
 from xai_sdk.chat import user as chat_user
 
-from das.ad_generation_dataclasses import Video, User, Product
-from das.utils import create_chat, generate_image
+from das.ad_generation_dataclasses import PRODUCT_IMAGE_RESIZE_DIM, Video, User, Product
+from das.utils import create_chat, encode_base64, generate_image
 
 
 LOGGING_COLOR_GREEN = '\033[92m'
@@ -16,7 +17,7 @@ LOGGING_COLOR_RESET = '\033[0m'
 logging.basicConfig(format=f'{LOGGING_COLOR_GREEN}%(levelname)s{LOGGING_COLOR_RESET}: %(message)s', level=logging.INFO)
 
 
-def generate_ad(user: User, products: list[Product]) -> Video:
+def generate_ad(user: User, products: list[Product], edit=True) -> Video:
     # NOTE queue worker for this function and let user keep scrolling until ad is ready
 
     # TODO replace with recommendation system
@@ -39,7 +40,12 @@ def generate_ad(user: User, products: list[Product]) -> Video:
     image_path = output_dir / f"{_id}.png"
     video_path = output_dir / f"{_id}.mp4"
 
-    image = generate_image(response)
+    if edit:
+        image = Image.open(prod.path)
+        image.thumbnail(PRODUCT_IMAGE_RESIZE_DIM)
+        image = generate_image(response, image=image)
+    else:
+        image = generate_image(response)
     image.save(image_path)
     # Create 5 second video from image
     ffmpeg.input(str(image_path), loop=1, t=5).output(str(video_path), vcodec='libx264', pix_fmt='yuv420p').run()
