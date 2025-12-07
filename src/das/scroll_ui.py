@@ -42,6 +42,15 @@ from das.ad_generation_dataclasses import (
 from das.ad_performance import AdPerformanceStore
 
 
+import os
+import sys
+
+# Redirect stderr at the file descriptor level (before QApplication)
+devnull = os.open(os.devnull, os.O_WRONLY)
+os.dup2(devnull, 2)  # 2 = stderr file descriptor
+os.close(devnull)
+
+
 @dataclass
 class VideoState:
     """Holds state and metrics for a single video, wired to ad-generation dataclasses."""
