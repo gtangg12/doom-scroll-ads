@@ -12,6 +12,9 @@ classifiers = [
     "Programming Language :: Python",
 ]
 dependencies = [
+    "torch",
+    "torchvision",
+    "xai-sdk",
 ]
 
 [project.optional-dependencies]
