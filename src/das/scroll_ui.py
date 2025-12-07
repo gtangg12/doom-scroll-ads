@@ -776,7 +776,7 @@ class ScrollWindow(QMainWindow):
         - We've counted at least 5 such organic views since the last ad
         - At least one ad video is already cached and ready to play
         """
-        N = 5
+        N = 1
         if self._organic_views_since_last_ad < N:
             return
         if not self._ad_cache:
