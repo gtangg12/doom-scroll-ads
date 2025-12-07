@@ -13,4 +13,5 @@ python scripts/preprocess/parse_videos.py
 
 ## 
 ```bash
-python 
+python scripts/launch.py
+```
