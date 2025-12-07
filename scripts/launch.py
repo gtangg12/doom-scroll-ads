@@ -12,7 +12,6 @@ def main() -> None:
     )
     parser.add_argument(
         "--video_dir",
-        nargs="?",
         help=(
             "Optional directory containing videos to scroll through. "
             "If omitted, you will be prompted to choose one."
@@ -24,6 +23,14 @@ def main() -> None:
         default="zhang_yunzhi",
         help="X/Twitter handle for the user (default: zhang_yunzhi)",
     )
+    parser.add_argument(
+        "--disable_x_profile",
+        action="store_true",
+        help=(
+            "Disable using an X/Twitter profile (no X history fetch or profile-based context). "
+            "Sharing on X remains enabled."
+        ),
+    )
     args = parser.parse_args()
 
     directory: Path | None
@@ -32,7 +39,10 @@ def main() -> None:
     else:
         directory = None
 
-    run_scroll_ui(directory, x_handle=args.x_handle)
+    # If the profile is disabled, do not pass an X handle through to the UI.
+    x_handle: str | None = None if args.disable_x_profile else args.x_handle
+
+    run_scroll_ui(directory, x_handle=x_handle)
 
 
 if __name__ == "__main__":
