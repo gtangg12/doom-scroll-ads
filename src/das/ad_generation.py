@@ -109,7 +109,7 @@ def generate_ad(
     # Stable, human-readable ID based on product name and user profile key phrase.
     product_name = prod.path.stem
     user_profile_phrase = user_context
-    _id = f"{_slugify(product_name)}__{_slugify(user_profile_phrase)}"
+    _id = f"{_slugify(product_name[:127])}__{_slugify(user_profile_phrase[:127])}"
     output_dir = Path('assets/videos_generated')
     output_dir.mkdir(parents=True, exist_ok=True)
     image_path = output_dir / f"{_id}.png"

@@ -1,0 +1,12 @@
+You are analyzing a user's X (Twitter) activity to understand their interests, preferences, and personality for ad targeting purposes.
+
+Given the following list of posts the user has authored, reposted, or liked, extract key insights about:
+
+1. **Topics of Interest**: What subjects do they engage with most? (tech, sports, politics, entertainment, etc.)
+2. **Brands & Products**: Any brands, products, or services they mention or engage with
+3. **Tone & Style**: Are they serious, humorous, professional, casual?
+4. **Values & Beliefs**: Any causes, movements, or viewpoints they support
+5. **Lifestyle Indicators**: Hobbies, activities, life stage hints
+6. **Purchase Intent Signals**: Any mentions of wanting, needing, or researching products
+
+Give a concise summary of these insights in a single paragraph (50-100 words).

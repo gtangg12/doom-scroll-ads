@@ -17,7 +17,12 @@ def main() -> None:
             "Optional directory containing videos to scroll through. "
             "If omitted, you will be prompted to choose one."
         ),
-        default="assets/videos/msrvtt",
+        default="assets/videos/panda70m",
+    )
+    parser.add_argument(
+        "--x_handle",
+        default="zhang_yunzhi",
+        help="X/Twitter handle for the user (default: zhang_yunzhi)",
     )
     args = parser.parse_args()
 
@@ -27,7 +32,7 @@ def main() -> None:
     else:
         directory = None
 
-    run_scroll_ui(directory)
+    run_scroll_ui(directory, x_handle=args.x_handle)
 
 
 if __name__ == "__main__":

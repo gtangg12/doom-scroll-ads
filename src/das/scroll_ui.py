@@ -132,6 +132,7 @@ class ScrollWindow(QMainWindow):
         self,
         videos: Sequence[Path],
         stats_path: Optional[Path] = None,
+        x_handle: Optional[str] = None,
     ) -> None:
         super().__init__()
 
@@ -155,6 +156,10 @@ class ScrollWindow(QMainWindow):
             self._user: User = build_user_from_stats(self._stats_path)
         else:
             self._user = User()
+
+        # Set X handle if provided
+        if x_handle:
+            self._user.set_x_handle(x_handle)
 
         # Preload available products once; ad generation will happen on a
         # background worker using this pool and product list.
@@ -974,7 +979,7 @@ def _collect_videos(directory: Path) -> List[Path]:
 
 
 
-def run_scroll_ui(video_dir: Optional[Path] = None) -> None:
+def run_scroll_ui(video_dir: Optional[Path] = None, x_handle: Optional[str] = None) -> None:
     """Launch the scroll UI.
 
     Parameters
@@ -982,6 +987,8 @@ def run_scroll_ui(video_dir: Optional[Path] = None) -> None:
     video_dir:
         Directory containing video files. If omitted or empty, the user
         is prompted to choose one.
+    x_handle:
+        Optional X/Twitter handle for the user.
     """
     app = QApplication.instance() or QApplication(sys.argv)
 
@@ -1005,7 +1012,7 @@ def run_scroll_ui(video_dir: Optional[Path] = None) -> None:
     # so that watch time / likes / shares survive across sessions.
     stats_path = Path("assets/logs/user.json")  # hardcoded path for now
 
-    window = ScrollWindow(videos, stats_path=stats_path)
+    window = ScrollWindow(videos, stats_path=stats_path, x_handle=x_handle)
     window.show()
     app.exec()
 

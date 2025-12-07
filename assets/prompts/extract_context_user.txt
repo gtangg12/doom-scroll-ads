@@ -14,6 +14,4 @@ Weight recent videos and highly-engaged content (hearted AND shared) more heavil
 
 If there are multiple distinct interest modes, randomly select exactly ONE mode to focus on for your output.
 
-Format your response as a single short key phrase (3–8 words) that best captures the selected interest mode for ad targeting (e.g., “budget-conscious home decor lover”).
-
-Do not include any preamble or explanation. Output only the key phrase.
+Give a concise summary of these insights in a single paragraph (50-100 words).
