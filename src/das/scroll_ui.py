@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import copy
-import json
 import random
-import re
-import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,7 +33,6 @@ from das.ad_generation_dataclasses import (
     UserReaction,
     Product,
     User,
-    build_user_from_stats,
     MIN_SECONDS_FOR_CONTEXT,
 )
 from das.ad_performance import AdPerformanceStore
@@ -145,7 +141,6 @@ class ScrollWindow(QMainWindow):
     def __init__(
         self,
         videos: Sequence[Path],
-        stats_path: Optional[Path] = None,
         x_handle: Optional[str] = None,
     ) -> None:
         super().__init__()
@@ -160,16 +155,9 @@ class ScrollWindow(QMainWindow):
         ]
         self.current_index: int = 0
         self._current_started_at: Optional[float] = None
-        # Optional path where per-video user stats are persisted across sessions.
-        self._stats_path: Optional[Path] = stats_path
 
-        # In-memory User object that mirrors the stats JSON. We build it once
-        # from the existing stats file (if any), then keep it incrementally
-        # updated as the user watches / likes / shares videos.
-        if self._stats_path is not None:
-            self._user: User = build_user_from_stats(self._stats_path)
-        else:
-            self._user = User()
+        # In-memory User object tracking watch history for ad generation.
+        self._user = User()
 
         # Set X handle if provided
         if x_handle:
@@ -210,20 +198,9 @@ class ScrollWindow(QMainWindow):
         self.setWindowTitle("Doom Scroll Ads")
         self.resize(900, 700)
 
-        # Load any previously persisted engagement + watch-time before the UI
-        # is initialized so labels reflect existing state.
-        self._load_persisted_state()
-
         self._init_media()
         self._init_ui()
         self._load_current_video()
-
-        # Periodically snapshot watch time + engagement so that, even if the
-        # app crashes or is closed abruptly, stats are mostly up to date.
-        self._snapshot_timer = QTimer(self)
-        self._snapshot_timer.setInterval(5000)  # ms
-        self._snapshot_timer.timeout.connect(self._snapshot_tick)
-        self._snapshot_timer.start()
 
         # Real-time UI update timer for seconds watched display
         self._ui_update_timer = QTimer(self)
@@ -608,83 +585,6 @@ class ScrollWindow(QMainWindow):
 
         frame.setFixedSize(target_width, target_height)
 
-    # ---- Persistence helpers -----------------------------------------------
-
-    def _load_persisted_state(self) -> None:
-        """Populate in-memory video state from an on-disk stats file, if any."""
-        if self._stats_path is None or not self._stats_path.exists():
-            return
-
-        try:
-            raw = self._stats_path.read_text(encoding="utf-8")
-            payload = json.loads(raw)
-        except (OSError, json.JSONDecodeError):
-            # If the file can't be read or parsed, just ignore it; the UI should
-            # still be fully functional for this session.
-            return
-
-        videos_data = payload.get("videos")
-        if not isinstance(videos_data, dict):
-            return
-
-        for state in self.video_states:
-            key = state.video.path.name
-            entry = videos_data.get(key)
-            if not isinstance(entry, dict):
-                continue
-
-            seconds = entry.get("seconds_watched")
-            heart = entry.get("heart")
-            share = entry.get("share")
-
-            if isinstance(seconds, (int, float)):
-                state.seconds_watched = float(seconds)
-
-            if isinstance(heart, bool):
-                state.reaction.heart = heart
-            if isinstance(share, bool):
-                state.reaction.share = share
-
-    def _persist_state(self) -> None:
-        """Write the current in-memory video state to disk."""
-        if self._stats_path is None:
-            return
-
-        data: dict[str, object] = {
-            "version": 1,
-            "videos": {},
-        }
-
-        videos_out: dict[str, dict[str, object]] = {}
-        for state in self.video_states:
-            videos_out[state.video.path.name] = {
-                "path": str(state.video.path),
-                "seconds_watched": state.seconds_watched,
-                "heart": state.reaction.heart,
-                "share": state.reaction.share,
-            }
-        data["videos"] = videos_out
-
-        try:
-            self._stats_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        except OSError:
-            # Persistence failures should never break the interactive experience.
-            pass
-
-    def _snapshot_tick(self) -> None:
-        """Periodically commit watch time for the current video and persist."""
-        if self._current_started_at is None:
-            return
-
-        now = time.monotonic()
-        elapsed = now - self._current_started_at
-        if elapsed <= 0:
-            return
-
-        self.current_video.seconds_watched += elapsed
-        self._current_started_at = now
-        self._persist_state()
-
     def _update_watch_time_display(self) -> None:
         """Update the UI to show real-time seconds watched."""
         if self._current_started_at is None:
@@ -821,7 +721,6 @@ class ScrollWindow(QMainWindow):
         # Directly toggle the UserReaction "heart" flag used by ad-generation.
         self.current_video.reaction.heart = checked
         self._update_ui_from_state()
-        self._persist_state()
         self._maybe_append_current_video_to_user()
 
     def _on_share_clicked(self, checked: bool) -> None:
@@ -831,7 +730,6 @@ class ScrollWindow(QMainWindow):
             self._share_on_x()
         self.current_video.reaction.share = checked
         self._update_ui_from_state()
-        self._persist_state()
         self._maybe_append_current_video_to_user()
 
     def _on_cta_clicked(self) -> None:
@@ -896,7 +794,6 @@ class ScrollWindow(QMainWindow):
                     print(f"[ADS][metrics] Failed to record ad performance: {exc!r}")
 
         self._current_started_at = None
-        self._persist_state()
         self._maybe_append_current_video_to_user()
 
     def _update_ui_from_state(self) -> None:
@@ -955,8 +852,13 @@ class ScrollWindow(QMainWindow):
         if state.context_appended:
             return
 
+        # Include in-progress watch time
+        current_watched = state.seconds_watched
+        if self._current_started_at is not None:
+            current_watched += time.monotonic() - self._current_started_at
+
         if (
-            state.seconds_watched >= MIN_SECONDS_FOR_CONTEXT
+            current_watched >= MIN_SECONDS_FOR_CONTEXT
             or state.reaction.heart
             or state.reaction.share
         ):
@@ -969,13 +871,8 @@ class ScrollWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         self._commit_watch_time()
-        # Stop periodic snapshots and make one last best-effort persist so that
-        # stats are flushed even if we didn't hit the timer again.
-        if hasattr(self, "_snapshot_timer"):
-            self._snapshot_timer.stop()
         if hasattr(self, "_ui_update_timer"):
             self._ui_update_timer.stop()
-        self._persist_state()
         self._print_summary()
         super().closeEvent(event)
 
@@ -1048,8 +945,6 @@ def _collect_videos(directory: Path) -> List[Path]:
     return paths
 
 
-
-
 def run_scroll_ui(video_dir: Optional[Path] = None, x_handle: Optional[str] = None) -> None:
     """Launch the scroll UI.
 
@@ -1079,11 +974,7 @@ def run_scroll_ui(video_dir: Optional[Path] = None, x_handle: Optional[str] = No
         )
         return
 
-    # Persist user stats in a JSON file alongside the selected video directory
-    # so that watch time / likes / shares survive across sessions.
-    stats_path = Path("assets/logs/user.json")  # hardcoded path for now
-
-    window = ScrollWindow(videos, stats_path=stats_path, x_handle=x_handle)
+    window = ScrollWindow(videos, x_handle=x_handle)
     window.show()
     app.exec()
 

@@ -10,7 +10,6 @@ import os
 from PIL import Image
 from xai_sdk import Client
 from xai_sdk.chat import user as chat_user, image as chat_image
-from xai_sdk.tools import web_search as chat_web_search, x_search as chat_x_search
 from xai_sdk.search import SearchParameters, x_source
 
 from das.utils import create_chat, encode_base64
@@ -19,8 +18,6 @@ from das.utils import create_chat, encode_base64
 USER_VIDEO_MEMORY_LIMIT = 50
 USER_X_HISTORY_LIMIT = 20  # Max posts/likes/reposts to fetch from X
 PRODUCT_IMAGE_RESIZE_DIM = (1024, 1024)
-DEFAULT_USER_STATS_PATH = Path("assets/logs/user.json")
-DEFAULT_X_HANDLE_PATH = Path("assets/logs/x_handle.txt")
 # Minimum watch time (in seconds) for a video to be considered part of the
 # user's context, unless it has explicit engagement (like/share).
 MIN_SECONDS_FOR_CONTEXT = 5.0
@@ -95,7 +92,7 @@ def fetch_x_history(x_handle: str) -> XHistory:
     """
     x_handle = x_handle.lstrip('@')
     history = XHistory(x_handle=x_handle)
-    limit = USER_X_HISTORY_LIMIT  # Use the constant, not a parameter
+    limit = USER_X_HISTORY_LIMIT
     
     try:
         client = Client(api_key=os.getenv("XAI_API_KEY"))
@@ -298,74 +295,6 @@ class User:
         if self.x_handle:
             self.x_history = fetch_x_history(self.x_handle)
             self.cached_context = None
-
-
-def build_user_from_stats(
-    stats_path: Path | str = DEFAULT_USER_STATS_PATH,
-    x_handle_path: Path | str = DEFAULT_X_HANDLE_PATH,
-) -> User:
-    """Reconstruct a User from the JSON stats file written by the scroll UI.
-
-    A video contributes to the resulting User's context if either:
-    - it has at least MIN_SECONDS_FOR_CONTEXT seconds of watch time, or
-    - it has explicit engagement (heart or share).
-    
-    If an X handle file exists, also fetch the user's X history.
-    """
-    stats_path = Path(stats_path)
-    x_handle_path = Path(x_handle_path)
-    
-    user = User()
-    
-    # Load X handle if available
-    if x_handle_path.exists():
-        try:
-            x_handle = x_handle_path.read_text(encoding="utf-8").strip()
-            if x_handle:
-                print(f"[USER] Loading X history for @{x_handle}...")
-                user.set_x_handle(x_handle, fetch_history=True)
-                print(f"[USER] Loaded {len(user.x_history.posts) if user.x_history else 0} X posts")
-        except Exception as e:
-            logging.warning(f"Failed to load X handle: {e}")
-    
-    # Load video stats
-    if not stats_path.exists():
-        return user
-
-    try:
-        raw = stats_path.read_text(encoding="utf-8")
-        payload = json.loads(raw)
-    except (OSError, json.JSONDecodeError):
-        return user
-
-    videos_data = payload.get("videos")
-    if not isinstance(videos_data, dict):
-        return user
-
-    for entry in videos_data.values():
-        if not isinstance(entry, dict):
-            continue
-
-        path_str = entry.get("path")
-        if not isinstance(path_str, str):
-            continue
-
-        video_path = Path(path_str)
-        video = Video(path=video_path)
-
-        heart = bool(entry.get("heart", False))
-        share = bool(entry.get("share", False))
-        seconds_watched = float(entry.get("seconds_watched", 0.0))
-
-        # Skip videos that don't meet the minimum watch time and had no
-        # engagement; they shouldn't influence the user's long-term context.
-        if seconds_watched < MIN_SECONDS_FOR_CONTEXT and not (heart or share):
-            continue
-
-        reaction = UserReaction(heart=heart, share=share, seconds_watched=seconds_watched)
-        user.append_video(video, reaction)
-
-    return user
 
 
 if __name__ == '__main__':
