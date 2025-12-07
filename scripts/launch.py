@@ -11,7 +11,7 @@ def main() -> None:
         description="Launch the doom-scroll ads frontend.",
     )
     parser.add_argument(
-        "video_dir",
+        "--video_dir",
         nargs="?",
         help=(
             "Optional directory containing videos to scroll through. "
