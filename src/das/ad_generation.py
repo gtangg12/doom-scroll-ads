@@ -42,7 +42,7 @@ def collect_cached_ads(directory: Path) -> list[Video]:
 
     # Build a lookup table from slugified product name → product.path
     product_by_slug: dict[str, Path] = {}
-    for prod in _products:
+    for prod in _PRODUCTS:
         slug = _slugify(prod.path.stem)
         product_by_slug[slug] = prod.path
 
@@ -81,8 +81,8 @@ def _collect_products(directory: Path) -> list[Product]:
     return products
 
 
-_products: list[Product] = _collect_products(Path("assets/products"))
-print(f"[ADS] Loaded {len(_products)} products from assets/products")
+_PRODUCTS: list[Product] = _collect_products(Path("assets/products"))
+print(f"[ADS] Loaded {len(_PRODUCTS)} products from assets/products")
 
 
 def generate_ad(

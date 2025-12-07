@@ -1,0 +1,12 @@
+[
+  {
+    "id": "sample_auto_repair_kit",
+    "name": "DIY Auto Repair Starter Kit",
+    "image_path": "assets/products/sample.png",
+    "description_path": "assets/products/sample_context.txt",
+    "url": "https://example.com/products/diy-auto-repair-starter-kit",
+    "cta_text": "View product"
+  }
+]
+
+

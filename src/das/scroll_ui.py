@@ -40,6 +40,11 @@ from das.ad_generation_dataclasses import (
     MIN_SECONDS_FOR_CONTEXT,
 )
 from das.ad_performance import AdPerformanceStore
+from das.product_metadata import (
+    ProductMeta,
+    get_product_metadata_for_basename,
+    load_product_description,
+)
 
 
 import os
@@ -340,6 +345,27 @@ class ScrollWindow(QMainWindow):
         )
         frame_layout.addWidget(self.sticker_label, alignment=Qt.AlignLeft)
         self.sticker_label.hide()
+
+        # Call-to-action button for ad videos; hidden for organic content.
+        self.cta_button = QPushButton("", self)
+        self.cta_button.setVisible(False)
+        self.cta_button.clicked.connect(self._on_cta_clicked)
+        self.cta_button.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #ffffff;
+                color: #000000;
+                border-radius: 999px;
+                padding: 6px 18px;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #f2f2f2;
+            }
+            """
+        )
+        frame_layout.addWidget(self.cta_button, alignment=Qt.AlignHCenter)
 
         # Footer strip with top/bottom separators
         footer = QWidget(self)
@@ -808,6 +834,26 @@ class ScrollWindow(QMainWindow):
         self._persist_state()
         self._maybe_append_current_video_to_user()
 
+    def _on_cta_clicked(self) -> None:
+        """Open the current ad's product URL, if available."""
+        meta = self._current_product_meta()
+        if meta is None or not meta.url:
+            QMessageBox.information(
+                self,
+                "Product unavailable",
+                "No product link is available for this ad.",
+            )
+            return
+        QDesktopServices.openUrl(QUrl(meta.url))
+
+    def _current_product_meta(self) -> Optional[ProductMeta]:
+        """Return metadata for the current ad video, if any."""
+        state = self.current_video
+        if not state.is_ad or state.video.product_path is None:
+            return None
+        basename = state.video.product_path.name
+        return get_product_metadata_for_basename(basename)
+
     def _share_on_x(self) -> None:
         """Open X (Twitter) share intent in the default browser."""
         video_name = self.current_video.video.path.stem
@@ -875,6 +921,22 @@ class ScrollWindow(QMainWindow):
             self.share_button.blockSignals(False)
 
         # Sticker label is no longer shown; we keep engagement tracking only.
+
+        # Show product CTA only for ad videos that have linked product metadata.
+        meta = self._current_product_meta()
+        if meta is not None:
+            self.cta_button.setText(meta.cta_text or "View product")
+            self.cta_button.setVisible(True)
+
+            # Optional: show a short tooltip description, if available.
+            desc = load_product_description(meta)
+            if desc:
+                self.cta_button.setToolTip(desc)
+            else:
+                self.cta_button.setToolTip("")
+        else:
+            self.cta_button.setVisible(False)
+            self.cta_button.setToolTip("")
 
     def _maybe_append_current_video_to_user(self) -> None:
         """Append the current video to the in-memory User when it "matters".
