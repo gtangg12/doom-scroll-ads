@@ -161,6 +161,7 @@ class ScrollWindow(QMainWindow):
 
         # In-memory User object tracking watch history for ad generation.
         self._user = User()
+        self._user_has_context = False  # True once at least one video is added to user
 
         # Set X handle if provided
         if x_handle:
@@ -655,6 +656,8 @@ class ScrollWindow(QMainWindow):
         
         We generate at most one ad at a time, and only if we don't have one cached.
         """
+        if not self._user_has_context:
+            return  # Don't generate ads until user has watched something
         if self._ad_cache:
             return  # Already have an ad ready
         if self._ad_future is not None and not self._ad_future.done():
@@ -690,7 +693,7 @@ class ScrollWindow(QMainWindow):
 
     def _maybe_insert_ad_after_current(self) -> None:
         """Insert an ad after every N organic videos, if one is cached."""
-        N = 1
+        N = 5
         if self._organic_views_since_last_ad < N:
             return
         if not self._ad_cache:
@@ -876,6 +879,10 @@ class ScrollWindow(QMainWindow):
             # toggles (like/share) keep the User's history in sync.
             self._user.append_video(state.video, state.reaction)
             state.context_appended = True
+            self._user_has_context = True
+            
+            # Now that we have user context, start ad generation if needed
+            self._ensure_ad_queued()
 
     # ---- Lifecycle -------------------------------------------------------
 
