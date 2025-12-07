@@ -242,6 +242,8 @@ class User:
     x_history: Optional[XHistory] = None
     x_handle: Optional[str] = None
     cached_context: Optional[str] = field(default=None)
+    # Flag to indicate X history is being fetched in background
+    _x_history_loading: bool = field(default=False, repr=False)
 
     @property
     def context(self) -> str:
@@ -264,7 +266,7 @@ class User:
                 response = chat.sample()
                 context_parts.append(f"VIDEO PREFERENCES:\n{response.content}")
         
-        # Part 2: X history (if available)
+        # Part 2: X history (if available and loaded)
         if self.x_history and self.x_history.posts:
             x_context = self.x_history.context
             if x_context:
@@ -284,11 +286,40 @@ class User:
         self.cached_context = None  # invalidate cached context
     
     def set_x_handle(self, handle: str, fetch_history: bool = True):
-        """Set the user's X handle and optionally fetch their history."""
+        """Set the user's X handle and optionally fetch their history.
+        
+        Note: This fetches synchronously. For non-blocking fetch, use
+        set_x_handle_async() with a ThreadPoolExecutor.
+        """
         self.x_handle = handle.lstrip('@')
         if fetch_history:
             self.x_history = fetch_x_history(self.x_handle)
         self.cached_context = None  # invalidate cached context
+    
+    def set_x_handle_deferred(self, handle: str):
+        """Set the user's X handle without fetching history yet.
+        
+        Call fetch_x_history_into() later (e.g., from a background thread)
+        to populate the history.
+        """
+        self.x_handle = handle.lstrip('@')
+        self.x_history = None
+        self._x_history_loading = True
+        self.cached_context = None
+    
+    def fetch_x_history_into(self):
+        """Fetch X history for the current handle. Thread-safe for background use."""
+        if self.x_handle:
+            self.x_history = fetch_x_history(self.x_handle)
+            self._x_history_loading = False
+            self.cached_context = None  # invalidate so next context call includes X data
+    
+    @property
+    def x_history_ready(self) -> bool:
+        """Check if X history has been loaded (or no handle was set)."""
+        if not self.x_handle:
+            return True  # No handle means nothing to load
+        return not self._x_history_loading
     
     def refresh_x_history(self):
         """Refresh the X history from the API."""

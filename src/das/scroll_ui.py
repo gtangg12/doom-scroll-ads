@@ -163,9 +163,11 @@ class ScrollWindow(QMainWindow):
         self._user = User()
         self._user_has_context = False  # True once at least one video is added to user
 
-        # Set X handle if provided
+        # Set X handle with DEFERRED loading - don't block UI startup
+        self._x_history_future: Optional[Future[None]] = None
         if x_handle:
-            self._user.set_x_handle(x_handle)
+            self._user.set_x_handle_deferred(x_handle)
+            # We'll start the background fetch after the executor is created
 
         # Preload available products once; ad generation will happen on a
         # background worker using this pool and product list.
@@ -180,15 +182,18 @@ class ScrollWindow(QMainWindow):
         # product selection in ad generation.
         self._ad_performance_store: AdPerformanceStore = AdPerformanceStore.load()
 
-
-
-        # Background ad-generation executor + polling timer so we never block
-        # the UI thread while calling the LLM or ffmpeg.
-        self._ad_executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=1)
+        # Background executor for ad-generation AND X history fetching
+        # Use 2 workers so X fetch doesn't block ad generation
+        self._ad_executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=2)
         self._ad_future: Optional[Future[Video]] = None
         self._ad_poll_timer = QTimer(self)
         self._ad_poll_timer.setInterval(500)  # ms
         self._ad_poll_timer.timeout.connect(self._check_ad_future)
+
+        # Now start the X history fetch in background (after executor exists)
+        if x_handle and self._user.x_handle:
+            print(f"[X] Starting background fetch for @{self._user.x_handle}...")
+            self._x_history_future = self._ad_executor.submit(self._fetch_x_history_background)
 
         self.setWindowTitle("Doom Scroll Ads")
         self.resize(900, 700)
@@ -209,6 +214,13 @@ class ScrollWindow(QMainWindow):
         # Kick off the first ad-generation request in the background so we
         # already have an ad ready by the time the user scrolls far enough.
         self._ensure_ad_queued()
+
+    # ---- Background X history fetch --------------------------------------
+
+    def _fetch_x_history_background(self) -> None:
+        """Worker function to fetch X history without blocking UI."""
+        self._user.fetch_x_history_into()
+        print(f"[X] Background fetch complete for @{self._user.x_handle}")
 
     # ---- Media setup -----------------------------------------------------
 
@@ -662,6 +674,11 @@ class ScrollWindow(QMainWindow):
             return  # Already have an ad ready
         if self._ad_future is not None and not self._ad_future.done():
             return  # Already generating
+        
+        # Wait for X history to finish loading before generating ads
+        if not self._user.x_history_ready:
+            print("[ADS] Waiting for X history to load before generating ads...")
+            return
 
         print("[ADS] Queuing background ad generation task...")
         self._ad_future = self._ad_executor.submit(self._generate_ad_for_current_user)
@@ -675,7 +692,17 @@ class ScrollWindow(QMainWindow):
         return ad_video
 
     def _check_ad_future(self) -> None:
-        """Poll for completion of the background ad task."""
+        """Poll for completion of the background ad task and X history."""
+        # Check if X history just finished loading - if so, we can now queue ads
+        if self._x_history_future is not None and self._x_history_future.done():
+            try:
+                self._x_history_future.result()  # Raise any exceptions
+            except Exception as exc:  # noqa: BLE001
+                print(f"[X] X history fetch failed: {exc!r}")
+            self._x_history_future = None
+            # Now that X history is ready, try to queue ad generation
+            self._ensure_ad_queued()
+        
         future = self._ad_future
         if future is None or not future.done():
             return
