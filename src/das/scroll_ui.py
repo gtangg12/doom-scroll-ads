@@ -221,7 +221,8 @@ class ScrollWindow(QMainWindow):
 
         frame_layout.addWidget(inner_container, stretch=1)
 
-        # Sticker label (engagement state) – small Apple-style pill
+        # Sticker label (engagement state) – previously a small Apple-style pill.
+        # We keep the widget around but hide it so the box no longer appears.
         self.sticker_label = QLabel("", self)
         self.sticker_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.sticker_label.setStyleSheet(
@@ -240,6 +241,7 @@ class ScrollWindow(QMainWindow):
             """
         )
         frame_layout.addWidget(self.sticker_label, alignment=Qt.AlignLeft)
+        self.sticker_label.hide()
 
         # Footer strip with top/bottom separators
         footer = QWidget(self)
@@ -573,18 +575,19 @@ class ScrollWindow(QMainWindow):
             self.like_button.blockSignals(False)
             self.share_button.blockSignals(False)
 
-        # Sticker label
-        sticker_text = self._sticker_text_for_engagement(engagement)
-        self.sticker_label.setText(sticker_text)
+        # Sticker label is no longer shown; we keep engagement tracking only.
 
     @staticmethod
     def _sticker_text_for_engagement(engagement: VideoEngagement) -> str:
-        if engagement is VideoEngagement.LIKED_AND_SHARED:
-            return "♡ liked   ·   ✶ shared"
-        if engagement is VideoEngagement.LIKED:
+        """Return the small pill text under the video.
+
+        We only surface "liked" now; the explicit "shared" tag is no longer
+        shown in the UI, while the share button state and analytics still
+        track sharing in the background.
+        """
+        if engagement in (VideoEngagement.LIKED, VideoEngagement.LIKED_AND_SHARED):
             return "♡ liked"
-        if engagement is VideoEngagement.SHARED:
-            return "✶ shared"
+        # For NEUTRAL or SHARED-only, don't show any sticker.
         return ""
 
     # ---- Lifecycle -------------------------------------------------------
