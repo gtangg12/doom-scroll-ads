@@ -4,11 +4,11 @@ import json
 import random
 import sys
 import time
-from dataclasses import dataclass
-from enum import Enum, auto
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Sequence
 from urllib.parse import quote
+from concurrent.futures import ThreadPoolExecutor, Future
 
 from PySide6.QtCore import Qt, QUrl, QTimer
 from PySide6.QtGui import QCloseEvent, QDesktopServices, QKeyEvent, QPainter, QColor
@@ -16,35 +16,29 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QApplication,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QVBoxLayout,
-    QWidget,
-    QFileDialog,
     QSizePolicy,
     QStackedLayout,
+    QVBoxLayout,
+    QWidget,
 )
 
-
-class VideoEngagement(Enum):
-    """Per-video user state."""
-
-    NEUTRAL = auto()
-    LIKED = auto()
-    SHARED = auto()
-    LIKED_AND_SHARED = auto()
+from das.ad_generation_dataclasses import Video as AdVideo, UserReaction, Product
 
 
 @dataclass
 class VideoState:
-    """Holds state and metrics for a single video."""
+    """Holds state and metrics for a single video, wired to ad-generation dataclasses."""
 
-    path: Path
+    video: AdVideo
     seconds_watched: float = 0.0
-    engagement: VideoEngagement = VideoEngagement.NEUTRAL
+    reaction: UserReaction = field(default_factory=UserReaction)
+    is_ad: bool = False  # True for generated ad videos, False for organic videos
 
 
 @dataclass
@@ -130,11 +124,33 @@ class ScrollWindow(QMainWindow):
         if not videos:
             raise ValueError("At least one video is required")
 
-        self.video_states: List[VideoState] = [VideoState(path=v) for v in videos]
+        # Wrap raw paths in the shared `Video` dataclass so ad-generation can
+        # consume the same objects the UI is using.
+        self.video_states: List[VideoState] = [
+            VideoState(video=AdVideo(path=v)) for v in videos
+        ]
         self.current_index: int = 0
         self._current_started_at: Optional[float] = None
         # Optional path where per-video user stats are persisted across sessions.
         self._stats_path: Optional[Path] = stats_path
+
+        # Preload available products once; ad generation will happen on a
+        # background worker using this pool and product list.
+        self._products: List[Product] = _collect_products(Path("assets/products"))
+        print(f"[ADS] Loaded {len(self._products)} products from assets/products")
+        # Cache of ready-to-insert ads.
+        self._ad_cache: list[AdVideo] = []
+        # Count of organic (non-ad) videos the user has scrolled through since
+        # the last inserted ad. Used to place an ad after every N organic views.
+        self._organic_views_since_last_ad: int = 0
+
+        # Background ad-generation executor + polling timer so we never block
+        # the UI thread while calling the LLM or ffmpeg.
+        self._ad_executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=1)
+        self._ad_future: Optional[Future[AdVideo]] = None
+        self._ad_poll_timer = QTimer(self)
+        self._ad_poll_timer.setInterval(500)  # ms
+        self._ad_poll_timer.timeout.connect(self._check_ad_future)
 
         self.setWindowTitle("Doom Scroll Ads")
         self.resize(900, 700)
@@ -153,6 +169,13 @@ class ScrollWindow(QMainWindow):
         self._snapshot_timer.setInterval(5000)  # ms
         self._snapshot_timer.timeout.connect(self._snapshot_tick)
         self._snapshot_timer.start()
+
+        # Start polling for completion of any background ad-generation tasks.
+        self._ad_poll_timer.start()
+
+        # Kick off the first ad-generation request in the background so we
+        # already have an ad ready by the time the user scrolls far enough.
+        self._ensure_ad_queued()
 
     # ---- Media setup -----------------------------------------------------
 
@@ -518,19 +541,38 @@ class ScrollWindow(QMainWindow):
             return
 
         for state in self.video_states:
-            key = state.path.name
+            key = state.video.path.name
             entry = videos_data.get(key)
             if not isinstance(entry, dict):
                 continue
 
             seconds = entry.get("seconds_watched")
             engagement_name = entry.get("engagement")
+            heart = entry.get("heart")
+            share = entry.get("share")
 
             if isinstance(seconds, (int, float)):
                 state.seconds_watched = float(seconds)
 
-            if isinstance(engagement_name, str) and engagement_name in VideoEngagement.__members__:
-                state.engagement = VideoEngagement[engagement_name]
+            # Prefer explicit boolean flags if present; otherwise fall back to
+            # legacy "engagement" enum-style field.
+            if isinstance(heart, bool) or isinstance(share, bool):
+                state.reaction.heart = bool(heart)
+                state.reaction.share = bool(share)
+            elif isinstance(engagement_name, str):
+                engagement_name = engagement_name.upper()
+                if engagement_name == "LIKED_AND_SHARED":
+                    state.reaction.heart = True
+                    state.reaction.share = True
+                elif engagement_name == "LIKED":
+                    state.reaction.heart = True
+                    state.reaction.share = False
+                elif engagement_name == "SHARED":
+                    state.reaction.heart = False
+                    state.reaction.share = True
+                else:
+                    state.reaction.heart = False
+                    state.reaction.share = False
 
     def _persist_state(self) -> None:
         """Write the current in-memory video state to disk."""
@@ -544,10 +586,24 @@ class ScrollWindow(QMainWindow):
 
         videos_out: dict[str, dict[str, object]] = {}
         for state in self.video_states:
-            videos_out[state.path.name] = {
-                "path": str(state.path),
+            # Map back to a legacy engagement string for compatibility, but
+            # also store explicit heart/share flags for the ad-generation
+            # dataclasses.
+            if state.reaction.heart and state.reaction.share:
+                engagement = "LIKED_AND_SHARED"
+            elif state.reaction.heart:
+                engagement = "LIKED"
+            elif state.reaction.share:
+                engagement = "SHARED"
+            else:
+                engagement = "NEUTRAL"
+
+            videos_out[state.video.path.name] = {
+                "path": str(state.video.path),
                 "seconds_watched": state.seconds_watched,
-                "engagement": state.engagement.name,
+                "engagement": engagement,
+                "heart": state.reaction.heart,
+                "share": state.reaction.share,
             }
         data["videos"] = videos_out
 
@@ -572,10 +628,106 @@ class ScrollWindow(QMainWindow):
         self._persist_state()
         self._update_ui_from_state()
 
+    # ---- Background ad generation -----------------------------------------
+
+    def _ensure_ad_queued(self) -> None:
+        """Ensure there is at least one ad-generation task in flight.
+
+        This runs entirely off the UI thread via a ThreadPoolExecutor so that
+        users can keep scrolling with zero lag while the ad is being prepared.
+        """
+        if self._ad_future is not None and not self._ad_future.done():
+            print("[ADS] Ad generation already in progress; not queuing another.")
+            return
+        if not self._products:
+            # No products available → we cannot generate ads.
+            print("[ADS] No products available; cannot queue ad generation.")
+            return
+
+        # Submit a background task that rebuilds the User from stats and calls
+        # generate_ad(user, products).
+        print("[ADS] Queuing background ad generation task...")
+        self._ad_future = self._ad_executor.submit(self._generate_ad_for_current_user)
+
+    def _generate_ad_for_current_user(self) -> AdVideo:
+        """Worker function executed in a background thread."""
+        # Import here to keep top-level imports lightweight for UI startup.
+        from das.ad_generation_dataclasses import build_user_from_stats
+        from das.ad_generation import generate_ad
+
+        # Build a fresh User reflecting the latest watch / engagement stats.
+        # We pass no path so it uses the default stats file, which is the same
+        # one that this UI writes to.
+        print("[ADS][worker] Starting ad generation for current user...")
+        user = build_user_from_stats()
+        ad_video = generate_ad(user, self._products)
+        print(f"[ADS][worker] Ad generation completed: {ad_video.path}")
+        return ad_video
+
+    def _check_ad_future(self) -> None:
+        """Poll for completion of the background ad task and insert when ready."""
+        future = self._ad_future
+        if future is None or not future.done():
+            return
+
+        # Clear the reference so _ensure_ad_queued can schedule the next one.
+        self._ad_future = None
+
+        try:
+            ad_video: AdVideo = future.result()
+        except Exception as exc:  # noqa: BLE001
+            # If ad-generation failed, don't surface it to the user; simply try
+            # again later, but do print a debug line so we can see failures.
+            print(f"[ADS] Ad generation failed: {exc!r}")
+            return
+
+        # Cache the ready ad; it will be inserted after the user has viewed a
+        # fixed number of organic videos. This keeps insertion logic tied to
+        # actual scrolling behaviour, while generation stays fully async.
+        self._ad_cache.append(ad_video)
+        print(f"[ADS] Cached new ad video ({len(self._ad_cache)} in cache).")
+
+        # Immediately queue up the next ad so there's always one coming down
+        # the pipe while the user keeps scrolling.
+        self._ensure_ad_queued()
+
+    def _maybe_insert_ad_after_current(self) -> None:
+        """Insert an ad after every N organic videos, if one is cached.
+
+        We only insert when:
+        - The user has just landed on an organic (non-ad) video
+        - We've counted at least 5 such organic views since the last ad
+        - At least one ad video is already cached and ready to play
+        """
+        N = 5
+        if self._organic_views_since_last_ad < N:
+            return
+        if not self._ad_cache:
+            print("[ADS] Threshold reached but no cached ads ready yet.")
+            return
+
+        ad_video = self._ad_cache.pop(0)
+        insert_at = min(self.current_index + 1, len(self.video_states))
+        self.video_states.insert(insert_at, VideoState(video=ad_video, is_ad=True))
+        self._organic_views_since_last_ad = 0
+        print(f"[ADS] Inserted ad after index {self.current_index}, total videos now {len(self.video_states)}.")
+
     def _go_next(self) -> None:
         self._commit_watch_time()
         self.current_index = (self.current_index + 1) % len(self.video_states)
         self._load_current_video()
+        # Count only organic videos towards the "every N videos show an ad"
+        # threshold; ad views themselves do not move the goalpost.
+        if not self.current_video.is_ad:
+            self._organic_views_since_last_ad += 1
+            print(
+                f"[ADS] Moved to video index {self.current_index} "
+                f"(organic views since last ad: {self._organic_views_since_last_ad}, "
+                f"ad cache size: {len(self._ad_cache)})"
+            )
+            self._maybe_insert_ad_after_current()
+        else:
+            print(f"[ADS] Moved to ad video at index {self.current_index}")
 
     def _go_prev(self) -> None:
         self._commit_watch_time()
@@ -585,46 +737,23 @@ class ScrollWindow(QMainWindow):
     # ---- Engagement handling ---------------------------------------------
 
     def _on_like_clicked(self, checked: bool) -> None:
-        current = self.current_video.engagement
-        if checked:
-            if current is VideoEngagement.SHARED:
-                self.current_video.engagement = VideoEngagement.LIKED_AND_SHARED
-            elif current is VideoEngagement.LIKED_AND_SHARED:
-                # stay
-                pass
-            else:
-                self.current_video.engagement = VideoEngagement.LIKED
-        else:
-            if current is VideoEngagement.LIKED_AND_SHARED:
-                self.current_video.engagement = VideoEngagement.SHARED
-            elif current is VideoEngagement.LIKED:
-                self.current_video.engagement = VideoEngagement.NEUTRAL
+        # Directly toggle the UserReaction "heart" flag used by ad-generation.
+        self.current_video.reaction.heart = checked
         self._update_ui_from_state()
         self._persist_state()
 
     def _on_share_clicked(self, checked: bool) -> None:
-        current = self.current_video.engagement
+        # When turning "share" on, open X, then flip the underlying reaction
+        # flag so ad-generation can see that the user shared this video.
         if checked:
-            # Open X share intent
             self._share_on_x()
-            if current is VideoEngagement.LIKED:
-                self.current_video.engagement = VideoEngagement.LIKED_AND_SHARED
-            elif current is VideoEngagement.LIKED_AND_SHARED:
-                # stay
-                pass
-            else:
-                self.current_video.engagement = VideoEngagement.SHARED
-        else:
-            if current is VideoEngagement.LIKED_AND_SHARED:
-                self.current_video.engagement = VideoEngagement.LIKED
-            elif current is VideoEngagement.SHARED:
-                self.current_video.engagement = VideoEngagement.NEUTRAL
+        self.current_video.reaction.share = checked
         self._update_ui_from_state()
         self._persist_state()
 
     def _share_on_x(self) -> None:
         """Open X (Twitter) share intent in the default browser."""
-        video_name = self.current_video.path.stem
+        video_name = self.current_video.video.path.stem
         text = f'Check out "{video_name}" on Doom Scroll Ads 🎬'
         encoded_text = quote(text)
         url = f"https://twitter.com/intent/tweet?text={encoded_text}"
@@ -633,7 +762,7 @@ class ScrollWindow(QMainWindow):
     # ---- Video loading & state sync --------------------------------------
 
     def _load_current_video(self) -> None:
-        path = self.current_video.path
+        path = self.current_video.video.path
         self.player.setSource(QUrl.fromLocalFile(str(path)))
         self.player.play()
         self._current_started_at = time.monotonic()
@@ -653,13 +782,12 @@ class ScrollWindow(QMainWindow):
         idx = self.current_index + 1
         total = len(self.video_states)
         watched = self.current_video.seconds_watched
-        self.title_label.setText(self.current_video.path.stem)
+        self.title_label.setText(self.current_video.video.path.stem)
         self.meta_label.setText(f"{idx:02d}/{total:02d}  ·  {watched:4.1f}s watched")
 
         # Buttons
-        engagement = self.current_video.engagement
-        like_on = engagement in (VideoEngagement.LIKED, VideoEngagement.LIKED_AND_SHARED)
-        share_on = engagement in (VideoEngagement.SHARED, VideoEngagement.LIKED_AND_SHARED)
+        like_on = self.current_video.reaction.heart
+        share_on = self.current_video.reaction.share
 
         try:
             self.like_button.blockSignals(True)
@@ -671,19 +799,6 @@ class ScrollWindow(QMainWindow):
             self.share_button.blockSignals(False)
 
         # Sticker label is no longer shown; we keep engagement tracking only.
-
-    @staticmethod
-    def _sticker_text_for_engagement(engagement: VideoEngagement) -> str:
-        """Return the small pill text under the video.
-
-        We only surface "liked" now; the explicit "shared" tag is no longer
-        shown in the UI, while the share button state and analytics still
-        track sharing in the background.
-        """
-        if engagement in (VideoEngagement.LIKED, VideoEngagement.LIKED_AND_SHARED):
-            return "♡ liked"
-        # For NEUTRAL or SHARED-only, don't show any sticker.
-        return ""
 
     # ---- Lifecycle -------------------------------------------------------
 
@@ -700,9 +815,11 @@ class ScrollWindow(QMainWindow):
     def _print_summary(self) -> None:
         print("\n=== Doom Scroll Session Summary ===")
         for state in self.video_states:
-            Eng = state.engagement.name
+            heart = "♥" if state.reaction.heart else " "
+            share = "↗" if state.reaction.share else " "
+            kind = "AD " if state.is_ad else "VID"
             print(
-                f"- {state.path.name:30s}  |  watched {state.seconds_watched:5.1f}s  |  {Eng}"
+                f"- {state.video.path.name:30s}  |  {kind}  |  watched {state.seconds_watched:5.1f}s  |  heart={heart} share={share}"
             )
 
 
@@ -717,9 +834,31 @@ def _select_directory(parent: QWidget | None = None) -> Optional[Path]:
 
 def _collect_videos(directory: Path) -> List[Path]:
     exts = {".mp4", ".mov", ".m4v", ".avi", ".mkv"}
-    paths = [p for p in directory.iterdir() if p.suffix.lower() in exts and p.is_file()]
+    paths: list[Path] = []
+    for p in directory.iterdir():
+        if p.suffix.lower() not in exts or not p.is_file():
+            continue
+        # Require a matching .txt caption file; if it's missing, skip this
+        # video so we don't later crash or generate ads with no context.
+        caption_path = p.parent / (p.stem + ".txt")
+        if not caption_path.exists():
+            print(f"[VIDEOS] Skipping {p.name} (missing {caption_path.name})")
+            continue
+        paths.append(p)
     random.shuffle(paths)
     return paths
+
+
+def _collect_products(directory: Path) -> List[Product]:
+    """Collect product images for ad generation."""
+    if not directory.exists():
+        return []
+    exts = {".png", ".jpg", ".jpeg", ".webp"}
+    products: List[Product] = []
+    for p in directory.iterdir():
+        if p.suffix.lower() in exts and p.is_file():
+            products.append(Product(path=p))
+    return products
 
 
 def run_scroll_ui(video_dir: Optional[Path] = None) -> None:
