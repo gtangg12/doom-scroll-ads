@@ -1,10 +1,50 @@
 [
   {
-    "id": "sample_auto_repair_kit",
-    "name": "DIY Auto Repair Starter Kit",
-    "image_path": "assets/products/sample.png",
-    "description_path": "assets/products/sample_context.txt",
-    "url": "https://example.com/products/diy-auto-repair-starter-kit",
+    "id": "camera",
+    "name": "Creator 4K Vlogging Camera",
+    "image_path": "assets/products/camera.png",
+    "description_path": "assets/products/camera.txt",
+    "url": "https://example.com/products/creator-4k-vlogging-camera",
+    "cta_text": "View product"
+  },
+  {
+    "id": "catfood",
+    "name": "Premium Indoor Cat Food",
+    "image_path": "assets/products/catfood.png",
+    "description_path": "assets/products/catfood.txt",
+    "url": "https://example.com/products/premium-indoor-cat-food",
+    "cta_text": "View product"
+  },
+  {
+    "id": "energy_drink",
+    "name": "HyperFocus Energy Drink",
+    "image_path": "assets/products/energy_drink.png",
+    "description_path": "assets/products/energy_drink.txt",
+    "url": "https://example.com/products/hyperfocus-energy-drink",
+    "cta_text": "View product"
+  },
+  {
+    "id": "gpu",
+    "name": "Next-Gen Gaming GPU",
+    "image_path": "assets/products/gpu.png",
+    "description_path": "assets/products/gpu.txt",
+    "url": "https://example.com/products/next-gen-gaming-gpu",
+    "cta_text": "View product"
+  },
+  {
+    "id": "shoes",
+    "name": "Everyday Running Shoes",
+    "image_path": "assets/products/shoes.png",
+    "description_path": "assets/products/shoes.txt",
+    "url": "https://example.com/products/everyday-running-shoes",
+    "cta_text": "View product"
+  },
+  {
+    "id": "tesla",
+    "name": "Electric Performance Sedan",
+    "image_path": "assets/products/tesla.png",
+    "description_path": "assets/products/tesla.txt",
+    "url": "https://example.com/products/electric-performance-sedan",
     "cta_text": "View product"
   }
 ]
