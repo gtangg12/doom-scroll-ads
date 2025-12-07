@@ -496,11 +496,15 @@ class ScrollWindow(QMainWindow):
             event.accept()
             return
         if event.key() == Qt.Key_1:
-            self.like_button.toggle()
+            # Use .click() so the same slot + side‑effects run as when the
+            # user presses the on‑screen heart button.
+            self.like_button.click()
             event.accept()
             return
         if event.key() == Qt.Key_2:
-            self.share_button.toggle()
+            # Use .click() so sharing via keyboard behaves exactly like
+            # clicking the on‑screen share button (including opening X).
+            self.share_button.click()
             event.accept()
             return
         super().keyPressEvent(event)
