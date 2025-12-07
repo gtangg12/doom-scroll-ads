@@ -956,7 +956,7 @@ def _collect_videos(directory: Path) -> List[Path]:
         # video so we don't later crash or generate ads with no context.
         caption_path = p.parent / (p.stem + ".txt")
         if not caption_path.exists():
-            print(f"[VIDEOS] Skipping {p.name} (missing {caption_path.name})")
+            #print(f"[VIDEOS] Skipping {p.name} (missing {caption_path.name})")
             continue
         paths.append(p)
     random.shuffle(paths)
