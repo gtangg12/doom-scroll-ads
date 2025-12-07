@@ -170,6 +170,12 @@ class ScrollWindow(QMainWindow):
         self._snapshot_timer.timeout.connect(self._snapshot_tick)
         self._snapshot_timer.start()
 
+        # Real-time UI update timer for seconds watched display
+        self._ui_update_timer = QTimer(self)
+        self._ui_update_timer.setInterval(100)  # 100ms for smooth updates
+        self._ui_update_timer.timeout.connect(self._update_watch_time_display)
+        self._ui_update_timer.start()
+
         # Start polling for completion of any background ad-generation tasks.
         self._ad_poll_timer.start()
 
@@ -189,6 +195,14 @@ class ScrollWindow(QMainWindow):
         # size hints from the underlying media. This prevents the card from
         # subtly resizing when videos have different resolutions/aspect ratios.
         self.video_widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        # Loop videos when they end
+        self.player.mediaStatusChanged.connect(self._on_media_status_changed)
+
+    def _on_media_status_changed(self, status: QMediaPlayer.MediaStatus) -> None:
+        """Restart video playback when it reaches the end."""
+        if status == QMediaPlayer.MediaStatus.EndOfMedia:
+            self.player.setPosition(0)
+            self.player.play()
 
     # ---- UI setup --------------------------------------------------------
 
@@ -547,32 +561,16 @@ class ScrollWindow(QMainWindow):
                 continue
 
             seconds = entry.get("seconds_watched")
-            engagement_name = entry.get("engagement")
             heart = entry.get("heart")
             share = entry.get("share")
 
             if isinstance(seconds, (int, float)):
                 state.seconds_watched = float(seconds)
 
-            # Prefer explicit boolean flags if present; otherwise fall back to
-            # legacy "engagement" enum-style field.
-            if isinstance(heart, bool) or isinstance(share, bool):
-                state.reaction.heart = bool(heart)
-                state.reaction.share = bool(share)
-            elif isinstance(engagement_name, str):
-                engagement_name = engagement_name.upper()
-                if engagement_name == "LIKED_AND_SHARED":
-                    state.reaction.heart = True
-                    state.reaction.share = True
-                elif engagement_name == "LIKED":
-                    state.reaction.heart = True
-                    state.reaction.share = False
-                elif engagement_name == "SHARED":
-                    state.reaction.heart = False
-                    state.reaction.share = True
-                else:
-                    state.reaction.heart = False
-                    state.reaction.share = False
+            if isinstance(heart, bool):
+                state.reaction.heart = heart
+            if isinstance(share, bool):
+                state.reaction.share = share
 
     def _persist_state(self) -> None:
         """Write the current in-memory video state to disk."""
@@ -586,22 +584,9 @@ class ScrollWindow(QMainWindow):
 
         videos_out: dict[str, dict[str, object]] = {}
         for state in self.video_states:
-            # Map back to a legacy engagement string for compatibility, but
-            # also store explicit heart/share flags for the ad-generation
-            # dataclasses.
-            if state.reaction.heart and state.reaction.share:
-                engagement = "LIKED_AND_SHARED"
-            elif state.reaction.heart:
-                engagement = "LIKED"
-            elif state.reaction.share:
-                engagement = "SHARED"
-            else:
-                engagement = "NEUTRAL"
-
             videos_out[state.video.path.name] = {
                 "path": str(state.video.path),
                 "seconds_watched": state.seconds_watched,
-                "engagement": engagement,
                 "heart": state.reaction.heart,
                 "share": state.reaction.share,
             }
@@ -626,7 +611,19 @@ class ScrollWindow(QMainWindow):
         self.current_video.seconds_watched += elapsed
         self._current_started_at = now
         self._persist_state()
-        self._update_ui_from_state()
+
+    def _update_watch_time_display(self) -> None:
+        """Update the UI to show real-time seconds watched."""
+        if self._current_started_at is None:
+            return
+        # Calculate current watch time without committing it
+        elapsed = time.monotonic() - self._current_started_at
+        total_watched = self.current_video.seconds_watched + elapsed
+        
+        # Update just the meta label for efficiency
+        idx = self.current_index + 1
+        total = len(self.video_states)
+        self.meta_label.setText(f"{idx:02d}/{total:02d}  ·  {total_watched:4.1f}s watched")
 
     # ---- Background ad generation -----------------------------------------
 
@@ -808,6 +805,8 @@ class ScrollWindow(QMainWindow):
         # stats are flushed even if we didn't hit the timer again.
         if hasattr(self, "_snapshot_timer"):
             self._snapshot_timer.stop()
+        if hasattr(self, "_ui_update_timer"):
+            self._ui_update_timer.stop()
         self._persist_state()
         self._print_summary()
         super().closeEvent(event)
@@ -897,4 +896,4 @@ def run_scroll_ui(video_dir: Optional[Path] = None) -> None:
     app.exec()
 
 
-__all__ = ["run_scroll_ui", "VideoEngagement", "VideoState", "ScrollWindow"]
+__all__ = ["run_scroll_ui", "VideoState", "ScrollWindow"]

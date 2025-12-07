@@ -136,10 +136,6 @@ def build_user_from_stats(stats_path: Path | str = DEFAULT_USER_STATS_PATH) -> U
         video_path = Path(path_str)
         video = Video(path=video_path)
 
-        # Preferred: explicit heart/share flags.
-        has_heart = "heart" in entry
-        has_share = "share" in entry
-
         heart = bool(entry.get("heart", False))
         share = bool(entry.get("share", False))
         seconds_watched = float(entry.get("seconds_watched", 0.0))
