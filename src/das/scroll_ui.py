@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 
 from das.ad_generation import collect_cached_ads
 from das.ad_generation_dataclasses import (
-    Video as AdVideo,
+    Video,
     UserReaction,
     Product,
     User,
@@ -46,7 +46,7 @@ from das.ad_performance import AdPerformanceStore
 class VideoState:
     """Holds state and metrics for a single video, wired to ad-generation dataclasses."""
 
-    video: AdVideo
+    video: Video
     seconds_watched: float = 0.0
     reaction: UserReaction = field(default_factory=UserReaction)
     is_ad: bool = False  # True for generated ad videos, False for organic videos
@@ -141,7 +141,7 @@ class ScrollWindow(QMainWindow):
         # Wrap raw paths in the shared `Video` dataclass so ad-generation can
         # consume the same objects the UI is using.
         self.video_states: List[VideoState] = [
-            VideoState(video=AdVideo(path=v)) for v in videos
+            VideoState(video=Video(path=v)) for v in videos
         ]
         self.current_index: int = 0
         self._current_started_at: Optional[float] = None
@@ -159,7 +159,7 @@ class ScrollWindow(QMainWindow):
         # Preload available products once; ad generation will happen on a
         # background worker using this pool and product list.
         # Cache of ready-to-insert ads.
-        self._ad_cache: list[AdVideo] = []
+        self._ad_cache: list[Video] = []
         # Count of organic (non-ad) videos the user has scrolled through since
         # the last inserted ad. Used to place an ad after every N organic views.
         self._organic_views_since_last_ad: int = 0
@@ -183,7 +183,7 @@ class ScrollWindow(QMainWindow):
         # Background ad-generation executor + polling timer so we never block
         # the UI thread while calling the LLM or ffmpeg.
         self._ad_executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=1)
-        self._ad_future: Optional[Future[AdVideo]] = None
+        self._ad_future: Optional[Future[Video]] = None
         self._ad_poll_timer = QTimer(self)
         self._ad_poll_timer.setInterval(500)  # ms
         self._ad_poll_timer.timeout.connect(self._check_ad_future)
@@ -689,7 +689,7 @@ class ScrollWindow(QMainWindow):
         print("[ADS] Queuing background ad generation task...")
         self._ad_future = self._ad_executor.submit(self._generate_ad_for_current_user)
 
-    def _generate_ad_for_current_user(self) -> AdVideo:
+    def _generate_ad_for_current_user(self) -> Video:
         """Worker function executed in a background thread."""
         from das.ad_generation import generate_ad
 
@@ -711,7 +711,7 @@ class ScrollWindow(QMainWindow):
         self._ad_future = None
 
         try:
-            ad_video: AdVideo = future.result()
+            ad_video: Video = future.result()
         except Exception as exc:  # noqa: BLE001
             # If ad-generation failed, don't surface it to the user; simply try
             # again later, but do print a debug line so we can see failures.
