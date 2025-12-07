@@ -1,0 +1,8 @@
+Select the most relevant product for the user based on their context. Return the index number of the best matching product from the provided list.
+
+Consider:
+- What the user is looking for or needs
+- The product names and what they suggest about the product's purpose
+- Match user intent to the most appropriate option
+
+Respond with only the selected_index of your chosen product.

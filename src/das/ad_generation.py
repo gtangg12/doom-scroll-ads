@@ -5,11 +5,16 @@ from pathlib import Path
 
 import ffmpeg
 from PIL import Image
+from pydantic import BaseModel
 from xai_sdk.chat import user as chat_user
 
 from das.ad_generation_dataclasses import PRODUCT_IMAGE_RESIZE_DIM, Video, User, Product
-from das.ad_performance import AdPerformanceStore
-from das.utils import create_chat, encode_base64, generate_image
+from das.utils import create_chat, generate_image
+
+
+class ProductSelection(BaseModel):
+    selected_index: int
+    reasoning: str
 
 
 def _slugify(text: str) -> str:
@@ -80,14 +85,20 @@ def generate_ad(
     user: User,
     edit: bool = True,
 ) -> Video:
-    # NOTE queue worker for this function and let user keep scrolling until ad is ready
-
-    # TODO replace with a richer recommendation system dependent on user context, or using simple historical performance metrics.
-    prod = random.choice(_PRODUCTS)
-
     user_context = user.context  # key phrase describing the user profile
-    prod_context = prod.context
     print("User Context: %s\n", user_context)
+
+    product_list_paragraph = "\n".join(f"{i}. {p.path.stem}" for i, p in enumerate(_PRODUCTS))
+    chat = create_chat('assets/prompts/product_selection.txt')
+    chat.append(chat_user(f"User context: {user_context}\n\nProducts:\n{product_list_paragraph}"))
+    response, selection = chat.parse(ProductSelection)
+    prod_index = min(max(selection.selected_index, 0), len(_PRODUCTS) - 1)
+    prod = _PRODUCTS[prod_index]
+    print(f"Selected Product Index: {prod_index}")  # should log catfood for test case below
+    print(f"Reasoning: {selection.reasoning}")
+    #prod = random.choice(_PRODUCTS)
+
+    prod_context = prod.context
     print("Prod Context: %s\n", prod_context)
 
     chat = create_chat('assets/prompts/image_generation.txt')
