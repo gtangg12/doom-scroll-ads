@@ -191,18 +191,11 @@ class ScrollWindow(QMainWindow):
         self.audio_output = QAudioOutput(self)
         self.player.setAudioOutput(self.audio_output)
         self.player.setVideoOutput(self.video_widget)
+        self.player.setLoops(QMediaPlayer.Loops.Infinite)
         # Keep the outer "phone" frame a consistent size by ignoring per-video
         # size hints from the underlying media. This prevents the card from
         # subtly resizing when videos have different resolutions/aspect ratios.
         self.video_widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
-        # Loop videos when they end
-        self.player.mediaStatusChanged.connect(self._on_media_status_changed)
-
-    def _on_media_status_changed(self, status: QMediaPlayer.MediaStatus) -> None:
-        """Restart video playback when it reaches the end."""
-        if status == QMediaPlayer.MediaStatus.EndOfMedia:
-            self.player.setPosition(0)
-            self.player.play()
 
     # ---- UI setup --------------------------------------------------------
 
@@ -648,14 +641,10 @@ class ScrollWindow(QMainWindow):
 
     def _generate_ad_for_current_user(self) -> AdVideo:
         """Worker function executed in a background thread."""
-        # Import here to keep top-level imports lightweight for UI startup.
         from das.ad_generation_dataclasses import build_user_from_stats
         from das.ad_generation import generate_ad
 
-        # Build a fresh User reflecting the latest watch / engagement stats.
-        # We pass no path so it uses the default stats file, which is the same
-        # one that this UI writes to.
-        print("[ADS][worker] Starting ad generation for current user...")
+        print("[ADS][worker] Starting ad generation...")
         user = build_user_from_stats()
         ad_video = generate_ad(user, self._products)
         print(f"[ADS][worker] Ad generation completed: {ad_video.path}")
