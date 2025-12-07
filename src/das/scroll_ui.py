@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QFileDialog,
+    QSizePolicy,
+    QStackedLayout,
 )
 
 
@@ -142,6 +144,10 @@ class ScrollWindow(QMainWindow):
         self.audio_output = QAudioOutput(self)
         self.player.setAudioOutput(self.audio_output)
         self.player.setVideoOutput(self.video_widget)
+        # Keep the outer "phone" frame a consistent size by ignoring per-video
+        # size hints from the underlying media. This prevents the card from
+        # subtly resizing when videos have different resolutions/aspect ratios.
+        self.video_widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
 
     # ---- UI setup --------------------------------------------------------
 
@@ -171,8 +177,11 @@ class ScrollWindow(QMainWindow):
         )
 
         # ---- Main content: centered "phone" card --------------------------
+        # Store as an attribute so we can keep its size iPhone-like and
+        # responsive in the window's resize handler.
         frame = QWidget(self)
         frame.setObjectName("VideoFrame")
+        self.phone_frame = frame  # type: ignore[attr-defined]
         frame_layout = QVBoxLayout(frame)
         frame_layout.setContentsMargins(18, 18, 16, 14)
         frame_layout.setSpacing(10)
@@ -180,22 +189,37 @@ class ScrollWindow(QMainWindow):
         frame.setStyleSheet(
             """
             QWidget#VideoFrame {
-                background-color: #000000;
+                /* Slightly translucent "glass" phone body so background stars peek through */
+                background-color: rgba(0, 0, 0, 0.65);
                 border-radius: 24px;
                 border: 1px solid rgba(255, 255, 255, 0.12);
             }
             """
         )
 
+        # Inner star field + video stacked so stars are visible inside the phone
+        # behind letterboxing areas, without affecting video playback.
+        inner_container = QWidget(self)
+        inner_stack = QStackedLayout(inner_container)
+        inner_stack.setContentsMargins(0, 0, 0, 0)
+        inner_stack.setStackingMode(QStackedLayout.StackAll)
+
+        inner_starfield = StarFieldWidget(inner_container)
+        inner_starfield.setObjectName("InnerStarField")
+
         self.video_widget.setStyleSheet(
             """
             QVideoWidget {
                 border-radius: 24px;
-                background-color: #000000;
+                background-color: transparent;
             }
             """
         )
-        frame_layout.addWidget(self.video_widget, stretch=1)
+
+        inner_stack.addWidget(inner_starfield)  # background
+        inner_stack.addWidget(self.video_widget)  # foreground
+
+        frame_layout.addWidget(inner_container, stretch=1)
 
         # Sticker label (engagement state) – small Apple-style pill
         self.sticker_label = QLabel("", self)
@@ -380,6 +404,9 @@ class ScrollWindow(QMainWindow):
         root_layout.addLayout(frame_row, stretch=1)
         root_layout.addWidget(hint)
 
+        # Initialize the phone frame geometry to an iPhone‑like aspect.
+        self._update_phone_frame_geometry()
+
         self._update_ui_from_state()
 
     # ---- Convenience properties ------------------------------------------
@@ -408,6 +435,48 @@ class ScrollWindow(QMainWindow):
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        """Keep the central phone card iPhone-like and responsive."""
+        super().resizeEvent(event)
+        self._update_phone_frame_geometry()
+
+    def _update_phone_frame_geometry(self) -> None:
+        """Resize the central phone frame with an iPhone-style aspect ratio.
+
+        We keep a tall, slim card (~19.5:9 aspect, like modern iPhones)
+        that scales with the window but never touches the edges, and is
+        independent from the underlying video resolution.
+        """
+        frame = getattr(self, "phone_frame", None)
+        root = self.centralWidget()
+        if frame is None or root is None:
+            return
+
+        # Target iPhone-like portrait aspect
+        aspect = 19.5 / 9.0  # height / width
+
+        root_width = max(root.width(), 1)
+        root_height = max(root.height(), 1)
+
+        # Leave generous margins around the phone
+        max_phone_width = max(root_width - 220, 320)
+        max_phone_height = max(root_height - 200, 480)
+
+        # Start from height, then clamp to available width if needed
+        target_height = max_phone_height
+        target_width = int(target_height / aspect)
+
+        if target_width > max_phone_width:
+            target_width = max_phone_width
+            target_height = int(target_width * aspect)
+
+        # Apply a reasonable minimum so it doesn't get too tiny
+        min_width, min_height = 320, int(320 * aspect)
+        target_width = max(target_width, min_width)
+        target_height = max(target_height, min_height)
+
+        frame.setFixedSize(target_width, target_height)
 
     def _go_next(self) -> None:
         self._commit_watch_time()
