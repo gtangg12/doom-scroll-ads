@@ -12,6 +12,7 @@ classifiers = [
     "Programming Language :: Python",
 ]
 dependencies = [
+    "ffmpeg-python",
     "torch",
     "torchvision",
     "xai-sdk",

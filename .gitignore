@@ -1,4 +1,6 @@
-*.mp4
+assets/products
+assets/videos
+assets/videos_generated
 
 tmp/
 outputs/

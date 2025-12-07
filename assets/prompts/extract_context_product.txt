@@ -1,0 +1,14 @@
+You are analyzing a product image to extract key information for ad generation.
+
+Examine the product image carefully and provide a concise, structured description that includes:
+
+1. **Product Type**: What category of product is this? (e.g., clothing, electronics, beauty, food, home goods)
+2. **Key Features**: Notable visual characteristics, colors, materials, style
+3. **Target Audience**: Who would likely purchase this product based on its appearance?
+4. **Price Tier**: Based on visual quality and branding, estimate if this appears budget, mid-range, or premium
+5. **Use Case**: Primary scenarios where this product would be used
+6. **Aesthetic/Vibe**: The mood or lifestyle the product represents (e.g., minimalist, luxurious, sporty, cozy)
+
+Format your response as a single paragraph that flows naturally, suitable for matching with video content for ad placement. Be specific but concise—aim for 50-100 words.
+
+Do not include any preamble or explanation. Output only the product context description.
