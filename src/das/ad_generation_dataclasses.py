@@ -1,6 +1,7 @@
 from collections import deque
 from dataclasses import dataclass, field
 from functools import cached_property
+import logging
 from pathlib import Path
 from typing import Optional
 import json
@@ -66,6 +67,7 @@ class Product:
 class UserReaction:
     heart: bool = False
     share: bool = False
+    seconds_watched: Optional[float] = None
 
 
 @dataclass
@@ -84,9 +86,10 @@ class User:
             return self.cached_context
         contexts = []
         for video, reaction in zip(self.videos_watched, self.videos_watched_reaction):
-            video_context = f"Context: {video.context}, Heart: {reaction.heart}, Share: {reaction.share}"
+            video_context = f"Context: {video.context}, Heart: {reaction.heart}, Share: {reaction.share}, Seconds Watched: {reaction.seconds_watched}"
             contexts.append(video_context)
         contexts_combined = "\n".join(contexts)
+        logging.info("User Videos Contexts Combined: %s\n", contexts_combined)
 
         chat = create_chat('assets/prompts/extract_context_user.txt')
         chat.append(chat_user(contexts_combined))
@@ -139,22 +142,8 @@ def build_user_from_stats(stats_path: Path | str = DEFAULT_USER_STATS_PATH) -> U
 
         heart = bool(entry.get("heart", False))
         share = bool(entry.get("share", False))
-
-        # Backwards-compat: if the JSON only has "engagement", map it into flags.
-        if not (has_heart or has_share):
-            engagement = entry.get("engagement")
-            if isinstance(engagement, str):
-                engagement = engagement.upper()
-                if engagement == "LIKED_AND_SHARED":
-                    heart, share = True, True
-                elif engagement == "LIKED":
-                    heart, share = True, False
-                elif engagement == "SHARED":
-                    heart, share = False, True
-                else:
-                    heart, share = False, False
-
-        reaction = UserReaction(heart=heart, share=share)
+        seconds_watched = float(entry.get("seconds_watched", 0.0))
+        reaction = UserReaction(heart=heart, share=share, seconds_watched=seconds_watched)
         user.append_video(video, reaction)
 
     return user
