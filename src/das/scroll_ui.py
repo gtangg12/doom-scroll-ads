@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import random
 import sys
 import time
@@ -119,7 +120,11 @@ class StarFieldWidget(QWidget):
 class ScrollWindow(QMainWindow):
     """Simple Instagram-style vertical video scroller."""
 
-    def __init__(self, videos: Sequence[Path]) -> None:
+    def __init__(
+        self,
+        videos: Sequence[Path],
+        stats_path: Optional[Path] = None,
+    ) -> None:
         super().__init__()
 
         if not videos:
@@ -128,13 +133,26 @@ class ScrollWindow(QMainWindow):
         self.video_states: List[VideoState] = [VideoState(path=v) for v in videos]
         self.current_index: int = 0
         self._current_started_at: Optional[float] = None
+        # Optional path where per-video user stats are persisted across sessions.
+        self._stats_path: Optional[Path] = stats_path
 
         self.setWindowTitle("Doom Scroll Ads")
         self.resize(900, 700)
 
+        # Load any previously persisted engagement + watch-time before the UI
+        # is initialized so labels reflect existing state.
+        self._load_persisted_state()
+
         self._init_media()
         self._init_ui()
         self._load_current_video()
+
+        # Periodically snapshot watch time + engagement so that, even if the
+        # app crashes or is closed abruptly, stats are mostly up to date.
+        self._snapshot_timer = QTimer(self)
+        self._snapshot_timer.setInterval(5000)  # ms
+        self._snapshot_timer.timeout.connect(self._snapshot_tick)
+        self._snapshot_timer.start()
 
     # ---- Media setup -----------------------------------------------------
 
@@ -480,6 +498,80 @@ class ScrollWindow(QMainWindow):
 
         frame.setFixedSize(target_width, target_height)
 
+    # ---- Persistence helpers -----------------------------------------------
+
+    def _load_persisted_state(self) -> None:
+        """Populate in-memory video state from an on-disk stats file, if any."""
+        if self._stats_path is None or not self._stats_path.exists():
+            return
+
+        try:
+            raw = self._stats_path.read_text(encoding="utf-8")
+            payload = json.loads(raw)
+        except (OSError, json.JSONDecodeError):
+            # If the file can't be read or parsed, just ignore it; the UI should
+            # still be fully functional for this session.
+            return
+
+        videos_data = payload.get("videos")
+        if not isinstance(videos_data, dict):
+            return
+
+        for state in self.video_states:
+            key = state.path.name
+            entry = videos_data.get(key)
+            if not isinstance(entry, dict):
+                continue
+
+            seconds = entry.get("seconds_watched")
+            engagement_name = entry.get("engagement")
+
+            if isinstance(seconds, (int, float)):
+                state.seconds_watched = float(seconds)
+
+            if isinstance(engagement_name, str) and engagement_name in VideoEngagement.__members__:
+                state.engagement = VideoEngagement[engagement_name]
+
+    def _persist_state(self) -> None:
+        """Write the current in-memory video state to disk."""
+        if self._stats_path is None:
+            return
+
+        data: dict[str, object] = {
+            "version": 1,
+            "videos": {},
+        }
+
+        videos_out: dict[str, dict[str, object]] = {}
+        for state in self.video_states:
+            videos_out[state.path.name] = {
+                "path": str(state.path),
+                "seconds_watched": state.seconds_watched,
+                "engagement": state.engagement.name,
+            }
+        data["videos"] = videos_out
+
+        try:
+            self._stats_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except OSError:
+            # Persistence failures should never break the interactive experience.
+            pass
+
+    def _snapshot_tick(self) -> None:
+        """Periodically commit watch time for the current video and persist."""
+        if self._current_started_at is None:
+            return
+
+        now = time.monotonic()
+        elapsed = now - self._current_started_at
+        if elapsed <= 0:
+            return
+
+        self.current_video.seconds_watched += elapsed
+        self._current_started_at = now
+        self._persist_state()
+        self._update_ui_from_state()
+
     def _go_next(self) -> None:
         self._commit_watch_time()
         self.current_index = (self.current_index + 1) % len(self.video_states)
@@ -508,6 +600,7 @@ class ScrollWindow(QMainWindow):
             elif current is VideoEngagement.LIKED:
                 self.current_video.engagement = VideoEngagement.NEUTRAL
         self._update_ui_from_state()
+        self._persist_state()
 
     def _on_share_clicked(self, checked: bool) -> None:
         current = self.current_video.engagement
@@ -527,6 +620,7 @@ class ScrollWindow(QMainWindow):
             elif current is VideoEngagement.SHARED:
                 self.current_video.engagement = VideoEngagement.NEUTRAL
         self._update_ui_from_state()
+        self._persist_state()
 
     def _share_on_x(self) -> None:
         """Open X (Twitter) share intent in the default browser."""
@@ -552,6 +646,7 @@ class ScrollWindow(QMainWindow):
         if elapsed > 0:
             self.current_video.seconds_watched += elapsed
         self._current_started_at = None
+        self._persist_state()
 
     def _update_ui_from_state(self) -> None:
         # Meta
@@ -594,6 +689,11 @@ class ScrollWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         self._commit_watch_time()
+        # Stop periodic snapshots and make one last best-effort persist so that
+        # stats are flushed even if we didn't hit the timer again.
+        if hasattr(self, "_snapshot_timer"):
+            self._snapshot_timer.stop()
+        self._persist_state()
         self._print_summary()
         super().closeEvent(event)
 
@@ -649,7 +749,11 @@ def run_scroll_ui(video_dir: Optional[Path] = None) -> None:
         )
         return
 
-    window = ScrollWindow(videos)
+    # Persist user stats in a JSON file alongside the selected video directory
+    # so that watch time / likes / shares survive across sessions.
+    stats_path = Path("assets/logs/user.json")  # hardcoded path for now
+
+    window = ScrollWindow(videos, stats_path=stats_path)
     window.show()
     app.exec()
 
