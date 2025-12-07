@@ -1,6 +1,6 @@
 import logging
 import random
-import uuid
+import re
 from pathlib import Path
 
 import ffmpeg
@@ -14,7 +14,19 @@ from das.utils import create_chat, encode_base64, generate_image
 LOGGING_COLOR_GREEN = '\033[92m'
 LOGGING_COLOR_RESET = '\033[0m'
 
-logging.basicConfig(format=f'{LOGGING_COLOR_GREEN}%(levelname)s{LOGGING_COLOR_RESET}: %(message)s', level=logging.INFO)
+logging.basicConfig(
+    format=f'{LOGGING_COLOR_GREEN}%(levelname)s{LOGGING_COLOR_RESET}: %(message)s',
+    level=logging.INFO,
+)
+
+
+def _slugify(text: str) -> str:
+    """Turn arbitrary text into a filesystem-friendly slug."""
+    text = text.lower().strip()
+    # Replace any run of non-alphanumeric characters with a single dash.
+    text = re.sub(r'[^a-z0-9]+', '-', text)
+    text = text.strip('-')
+    return text or "unknown"
 
 
 def generate_ad(user: User, products: list[Product], edit=True) -> Video:
@@ -23,7 +35,7 @@ def generate_ad(user: User, products: list[Product], edit=True) -> Video:
     # TODO replace with recommendation system
     prod = random.choice(products)
 
-    user_context = user.context
+    user_context = user.context  # key phrase describing the user profile
     prod_context = prod.context
     logging.info("User Context: %s\n", user_context)
     logging.info("Prod Context: %s\n", prod_context)
@@ -34,21 +46,40 @@ def generate_ad(user: User, products: list[Product], edit=True) -> Video:
     response = response.content.strip(' \n\t')
     logging.info("Generated Ad Prompt: %s\n", response)
 
-    _id = str(uuid.uuid4())
+    # Stable, human-readable ID based on product name and user profile key phrase.
+    product_name = prod.path.stem
+    user_profile_phrase = user_context
+    _id = f"{_slugify(product_name)}__{_slugify(user_profile_phrase)}"
     output_dir = Path('assets/videos_generated')
     output_dir.mkdir(parents=True, exist_ok=True)
     image_path = output_dir / f"{_id}.png"
     video_path = output_dir / f"{_id}.mp4"
 
-    if edit:
-        image = Image.open(prod.path)
-        image.thumbnail(PRODUCT_IMAGE_RESIZE_DIM)
-        image = generate_image(response, image=image)
+    # If we've already generated this exact ad before, reuse the cached video.
+    if video_path.exists():
+        logging.info("Reusing cached ad video at %s", video_path)
+        return Video(path=video_path)
+
+    # If the image exists but the video does not, reuse the image for video creation.
+    if image_path.exists():
+        logging.info("Reusing cached ad image at %s", image_path)
     else:
-        image = generate_image(response)
-    image.save(image_path)
-    # Create 5 second video from image
-    ffmpeg.input(str(image_path), loop=1, t=5).output(str(video_path), vcodec='libx264', pix_fmt='yuv420p').run()
+        if edit:
+            image = Image.open(prod.path)
+            image.thumbnail(PRODUCT_IMAGE_RESIZE_DIM)
+            image = generate_image(response, image=image)
+        else:
+            image = generate_image(response)
+        image.save(image_path)
+
+    # Create 5 second video from image, suppressing noisy ffmpeg output.
+    (
+        ffmpeg
+        .input(str(image_path), loop=1, t=5)
+        .output(str(video_path), vcodec='libx264', pix_fmt='yuv420p', loglevel='error')
+        .overwrite_output()
+        .run(quiet=True)
+    )
 
     return Video(path=video_path)
 

@@ -92,7 +92,7 @@ class User:
             video_context = f"Context: {video.context}, Heart: {reaction.heart}, Share: {reaction.share}, Seconds Watched: {reaction.seconds_watched}"
             contexts.append(video_context)
         contexts_combined = "\n".join(contexts)
-        logging.info("User Videos Contexts Combined: %s\n", contexts_combined)
+        # logging.info("User Videos Contexts Combined: %s\n", contexts_combined)
 
         chat = create_chat('assets/prompts/extract_context_user.txt')
         chat.append(chat_user(contexts_combined))
