@@ -87,13 +87,12 @@ print(f"[ADS] Loaded {len(_PRODUCTS)} products from assets/products")
 
 def generate_ad(
     user: User,
-    products: list[Product],
     edit: bool = True,
 ) -> Video:
     # NOTE queue worker for this function and let user keep scrolling until ad is ready
 
     # TODO replace with a richer recommendation system dependent on user context, or using simple historical performance metrics.
-    prod = random.choice(products)
+    prod = random.choice(_PRODUCTS)
 
     user_context = user.context  # key phrase describing the user profile
     prod_context = prod.context
