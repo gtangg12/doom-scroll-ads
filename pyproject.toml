@@ -15,6 +15,7 @@ dependencies = [
     "torch",
     "torchvision",
     "xai-sdk",
+    "PySide6",
 ]
 
 [project.optional-dependencies]
