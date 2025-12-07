@@ -12,6 +12,8 @@ classifiers = [
     "Programming Language :: Python",
 ]
 dependencies = [
+    "datasets",
+    "huggingface_hub",
     "ffmpeg-python",
     "torch",
     "torchvision",
