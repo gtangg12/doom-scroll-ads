@@ -105,22 +105,13 @@ def generate_ad(
     image_path = output_dir / f"{_id}.png"
     video_path = output_dir / f"{_id}.mp4"
 
-    # If we've already generated this exact ad before, reuse the cached video.
-    if video_path.exists():
-        print("Reusing cached ad video at %s", video_path)
-        return Video(path=video_path, product_path=prod.path)
-
-    # If the image exists but the video does not, reuse the image for video creation.
-    if image_path.exists():
-        print("Reusing cached ad image at %s", image_path)
+    if edit:
+        image = Image.open(prod.path)
+        image.thumbnail(PRODUCT_IMAGE_RESIZE_DIM)
+        image = generate_image(response, image=image)
     else:
-        if edit:
-            image = Image.open(prod.path)
-            image.thumbnail(PRODUCT_IMAGE_RESIZE_DIM)
-            image = generate_image(response, image=image)
-        else:
-            image = generate_image(response)
-        image.save(image_path)
+        image = generate_image(response)
+    image.save(image_path)
 
     # Create 5 second video from image, suppressing noisy ffmpeg output.
     (

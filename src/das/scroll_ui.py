@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from das.ad_generation import collect_cached_ads
+from das.ad_generation import generate_ad
 from das.ad_generation_dataclasses import (
     Video,
     UserReaction,
@@ -176,16 +176,7 @@ class ScrollWindow(QMainWindow):
         # product selection in ad generation.
         self._ad_performance_store: AdPerformanceStore = AdPerformanceStore.load()
 
-        # Pre-populate the ad cache with any already-generated ads on disk so
-        # the UI starts with a rich set of creatives even before the first
-        # background generation job completes.
-        cached_ads_dir = Path("assets/videos_generated")
-        cached_ads = collect_cached_ads(cached_ads_dir)
-        if cached_ads:
-            self._ad_cache.extend(cached_ads)
-            print(
-                f"[ADS] Preloaded {len(cached_ads)} cached ad videos from {cached_ads_dir}"
-            )
+
 
         # Background ad-generation executor + polling timer so we never block
         # the UI thread while calling the LLM or ffmpeg.
@@ -604,37 +595,20 @@ class ScrollWindow(QMainWindow):
     # ---- Background ad generation -----------------------------------------
 
     def _ensure_ad_queued(self) -> None:
-        """Ensure there is at least one ad-generation task in flight.
-
-        This runs entirely off the UI thread via a ThreadPoolExecutor so that
-        users can keep scrolling with zero lag while the ad is being prepared.
+        """Queue ad generation only when we're about to need one.
+        
+        We generate at most one ad at a time, and only if we don't have one cached.
         """
-        # Keep the ad cache near a target size; only generate more when the
-        # number of ready-to-insert ads falls below this threshold.
-        TARGET_CACHE_SIZE = 5
-        current_cache_size = len(self._ad_cache)
-        if current_cache_size >= TARGET_CACHE_SIZE:
-            print(
-                "[ADS] Ad cache at or above target size "
-                f"({current_cache_size}/{TARGET_CACHE_SIZE}); "
-                "not queuing additional ad generation."
-            )
-            return
+        if self._ad_cache:
+            return  # Already have an ad ready
         if self._ad_future is not None and not self._ad_future.done():
-            print("[ADS] Ad generation already in progress; not queuing another.")
-            return
+            return  # Already generating
 
-        # Submit a background task that rebuilds the User from stats and calls
-        # generate_ad(user, products).
         print("[ADS] Queuing background ad generation task...")
         self._ad_future = self._ad_executor.submit(self._generate_ad_for_current_user)
 
     def _generate_ad_for_current_user(self) -> Video:
         """Worker function executed in a background thread."""
-        from das.ad_generation import generate_ad
-
-        # Take a snapshot of the current in-memory User so ad generation sees a
-        # stable view of behaviour up to this point, without re-reading JSON.
         print("[ADS][worker] Starting ad generation for current user...")
         user_snapshot = copy.deepcopy(self._user)
         ad_video = generate_ad(user_snapshot)
@@ -642,73 +616,47 @@ class ScrollWindow(QMainWindow):
         return ad_video
 
     def _check_ad_future(self) -> None:
-        """Poll for completion of the background ad task and insert when ready."""
+        """Poll for completion of the background ad task."""
         future = self._ad_future
         if future is None or not future.done():
             return
 
-        # Clear the reference so _ensure_ad_queued can schedule the next one.
         self._ad_future = None
 
         try:
             ad_video: Video = future.result()
         except Exception as exc:  # noqa: BLE001
-            # If ad-generation failed, don't surface it to the user; simply try
-            # again later, but do print a debug line so we can see failures.
             print(f"[ADS] Ad generation failed: {exc!r}")
             return
 
-        # Cache the ready ad; it will be inserted after the user has viewed a
-        # fixed number of organic videos. This keeps insertion logic tied to
-        # actual scrolling behaviour, while generation stays fully async.
         self._ad_cache.append(ad_video)
-        print(f"[ADS] Cached new ad video ({len(self._ad_cache)} in cache).")
-
-        # Immediately queue up the next ad so there's always one coming down
-        # the pipe while the user keeps scrolling.
-        self._ensure_ad_queued()
+        print(f"[ADS] Ad ready.")
 
     def _maybe_insert_ad_after_current(self) -> None:
-        """Insert an ad after every N organic videos, if one is cached.
-
-        We only insert when:
-        - The user has just landed on an organic (non-ad) video
-        - We've counted at least 5 such organic views since the last ad
-        - At least one ad video is already cached and ready to play
-        """
+        """Insert an ad after every N organic videos, if one is cached."""
         N = 1
         if self._organic_views_since_last_ad < N:
             return
         if not self._ad_cache:
-            print("[ADS] Threshold reached but no cached ads ready yet.")
+            print("[ADS] Threshold reached but no ad ready yet.")
             return
 
         ad_video = self._ad_cache.pop(0)
         insert_at = min(self.current_index + 1, len(self.video_states))
         self.video_states.insert(insert_at, VideoState(video=ad_video, is_ad=True))
         self._organic_views_since_last_ad = 0
-        print(f"[ADS] Inserted ad after index {self.current_index}, total videos now {len(self.video_states)}.")
+        print(f"[ADS] Inserted ad after index {self.current_index}.")
 
-        # After consuming an ad, we may have dropped the cache below the target
-        # size; attempt to queue a new generation task if appropriate.
+        # Start generating the next ad now that we've used one
         self._ensure_ad_queued()
 
     def _go_next(self) -> None:
         self._commit_watch_time()
         self.current_index = (self.current_index + 1) % len(self.video_states)
         self._load_current_video()
-        # Count only organic videos towards the "every N videos show an ad"
-        # threshold; ad views themselves do not move the goalpost.
         if not self.current_video.is_ad:
             self._organic_views_since_last_ad += 1
-            print(
-                f"[ADS] Moved to video index {self.current_index} "
-                f"(organic views since last ad: {self._organic_views_since_last_ad}, "
-                f"ad cache size: {len(self._ad_cache)})"
-            )
             self._maybe_insert_ad_after_current()
-        else:
-            print(f"[ADS] Moved to ad video at index {self.current_index}")
 
     def _go_prev(self) -> None:
         self._commit_watch_time()
