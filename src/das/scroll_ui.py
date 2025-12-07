@@ -7,9 +7,10 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
 from typing import List, Optional, Sequence
+from urllib.parse import quote
 
 from PySide6.QtCore import Qt, QUrl, QTimer
-from PySide6.QtGui import QCloseEvent, QKeyEvent, QPainter, QColor
+from PySide6.QtGui import QCloseEvent, QDesktopServices, QKeyEvent, QPainter, QColor
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
@@ -150,7 +151,7 @@ class ScrollWindow(QMainWindow):
         self.setCentralWidget(root)
 
         root_layout = QVBoxLayout(root)
-        root_layout.setContentsMargins(32, 24, 32, 24)
+        root_layout.setContentsMargins(32, 24, 32, 32)
         root_layout.setSpacing(18)
 
         # ---- Header -------------------------------------------------------
@@ -169,12 +170,12 @@ class ScrollWindow(QMainWindow):
             """
         )
 
-        # ---- Main content: video card -------------------------------------
+        # ---- Main content: centered "phone" card --------------------------
         frame = QWidget(self)
         frame.setObjectName("VideoFrame")
         frame_layout = QVBoxLayout(frame)
-        frame_layout.setContentsMargins(18, 18, 18, 18)
-        frame_layout.setSpacing(12)
+        frame_layout.setContentsMargins(18, 18, 16, 14)
+        frame_layout.setSpacing(10)
 
         frame.setStyleSheet(
             """
@@ -216,12 +217,19 @@ class ScrollWindow(QMainWindow):
         )
         frame_layout.addWidget(self.sticker_label, alignment=Qt.AlignLeft)
 
-        # Info + controls row (like Apple Music bottom bar)
-        info_row = QHBoxLayout()
-        info_row.setContentsMargins(0, 0, 0, 0)
-        info_row.setSpacing(16)
+        # Footer strip with top/bottom separators
+        footer = QWidget(self)
+        footer.setObjectName("Footer")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(10, 8, 10, 8)
+        footer_layout.setSpacing(12)
 
-        # Meta info on the left
+        # Left thumbnail placeholder
+        thumb = QWidget(self)
+        thumb.setObjectName("ThumbPlaceholder")
+        thumb.setFixedSize(36, 36)
+
+        # Meta info (title + small line) in the middle
         meta_container = QWidget(self)
         meta_layout = QVBoxLayout(meta_container)
         meta_layout.setContentsMargins(0, 0, 0, 0)
@@ -257,7 +265,7 @@ class ScrollWindow(QMainWindow):
         controls = QWidget(self)
         controls_layout = QHBoxLayout(controls)
         controls_layout.setContentsMargins(0, 0, 0, 0)
-        controls_layout.setSpacing(12)
+        controls_layout.setSpacing(10)
 
         self.like_button = QPushButton("♥", self)
         self.like_button.setCheckable(True)
@@ -286,7 +294,7 @@ class ScrollWindow(QMainWindow):
             """
         )
 
-        self.share_button = QPushButton("⇪", self)
+        self.share_button = QPushButton("𝕏", self)
         self.share_button.setCheckable(True)
         self.share_button.clicked.connect(self._on_share_clicked)
         self.share_button.setStyleSheet(
@@ -302,7 +310,7 @@ class ScrollWindow(QMainWindow):
                 border-radius: 16px;
                 border: 1px solid rgba(255, 255, 255, 0.4);
                 font-size: 14px;
-                font-weight: 400;
+                font-weight: 700;
             }
             QPushButton:checked {
                 background-color: #ffffff;
@@ -317,13 +325,14 @@ class ScrollWindow(QMainWindow):
         controls_layout.addWidget(self.like_button)
         controls_layout.addWidget(self.share_button)
 
-        info_row.addWidget(meta_container, stretch=1)
-        info_row.addWidget(controls, stretch=0, alignment=Qt.AlignRight | Qt.AlignVCenter)
+        footer_layout.addWidget(thumb)
+        footer_layout.addWidget(meta_container, stretch=1)
+        footer_layout.addWidget(controls, stretch=0, alignment=Qt.AlignRight | Qt.AlignVCenter)
 
-        frame_layout.addLayout(info_row)
+        frame_layout.addWidget(footer)
 
         # Keyboard hint
-        hint = QLabel("↑ / ↓  scroll    ·    1  like    ·    2  share", self)
+        hint = QLabel("↑ / ↓  scroll    ·    1  like    ·    2  share on X", self)
         hint.setAlignment(Qt.AlignCenter)
         hint.setStyleSheet(
             """
@@ -336,11 +345,24 @@ class ScrollWindow(QMainWindow):
             """
         )
 
-        # Global background / typography (dark Apple Music–like)
+        # Global background / typography
         root.setStyleSheet(
             """
             QWidget#Root {
                 background-color: #000000;
+            }
+            QWidget#VideoFrame {
+                /* Video card already styled above */
+            }
+            QWidget#Footer {
+                border-top: 1px solid rgba(255, 255, 255, 0.16);
+                border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+                background-color: #000000;
+            }
+            QWidget#ThumbPlaceholder {
+                border-radius: 2px;
+                border: 1px solid rgba(255, 255, 255, 0.24);
+                background-color: transparent;
             }
             QLabel, QPushButton {
                 font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
@@ -349,8 +371,13 @@ class ScrollWindow(QMainWindow):
         )
 
         # Assemble main layout
+        frame_row = QHBoxLayout()
+        frame_row.addStretch(1)
+        frame_row.addWidget(frame)
+        frame_row.addStretch(1)
+
         root_layout.addWidget(title)
-        root_layout.addWidget(frame, stretch=1)
+        root_layout.addLayout(frame_row, stretch=1)
         root_layout.addWidget(hint)
 
         self._update_ui_from_state()
@@ -414,6 +441,8 @@ class ScrollWindow(QMainWindow):
     def _on_share_clicked(self, checked: bool) -> None:
         current = self.current_video.engagement
         if checked:
+            # Open X share intent
+            self._share_on_x()
             if current is VideoEngagement.LIKED:
                 self.current_video.engagement = VideoEngagement.LIKED_AND_SHARED
             elif current is VideoEngagement.LIKED_AND_SHARED:
@@ -427,6 +456,14 @@ class ScrollWindow(QMainWindow):
             elif current is VideoEngagement.SHARED:
                 self.current_video.engagement = VideoEngagement.NEUTRAL
         self._update_ui_from_state()
+
+    def _share_on_x(self) -> None:
+        """Open X (Twitter) share intent in the default browser."""
+        video_name = self.current_video.path.stem
+        text = f'Check out "{video_name}" on Doom Scroll Ads 🎬'
+        encoded_text = quote(text)
+        url = f"https://twitter.com/intent/tweet?text={encoded_text}"
+        QDesktopServices.openUrl(QUrl(url))
 
     # ---- Video loading & state sync --------------------------------------
 
@@ -546,5 +583,3 @@ def run_scroll_ui(video_dir: Optional[Path] = None) -> None:
 
 
 __all__ = ["run_scroll_ui", "VideoEngagement", "VideoState", "ScrollWindow"]
-
-
