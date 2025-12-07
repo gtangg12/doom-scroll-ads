@@ -8,7 +8,7 @@ from PIL import Image
 from pydantic import BaseModel
 from xai_sdk.chat import user as chat_user
 
-from das.ad_generation_dataclasses import PRODUCT_IMAGE_RESIZE_DIM, Video, User, Product
+from das.ad_generation_dataclasses import PRODUCT_IMAGE_RESIZE_DIM, FAST_MODEL, Video, User, Product
 from das.utils import create_chat, generate_image
 
 
@@ -89,7 +89,7 @@ def generate_ad(
     print("User Context: %s\n", user_context)
 
     product_list_paragraph = "\n".join(f"{i}. {p.path.stem}" for i, p in enumerate(_PRODUCTS))
-    chat = create_chat('assets/prompts/product_selection.txt')
+    chat = create_chat('assets/prompts/product_selection.txt', model=FAST_MODEL)
     chat.append(chat_user(f"User context: {user_context}\n\nProducts:\n{product_list_paragraph}"))
     response, selection = chat.parse(ProductSelection)
     prod_index = min(max(selection.selected_index, 0), len(_PRODUCTS) - 1)
@@ -101,7 +101,7 @@ def generate_ad(
     prod_context = prod.context
     print("Prod Context: %s\n", prod_context)
 
-    chat = create_chat('assets/prompts/image_generation.txt')
+    chat = create_chat('assets/prompts/image_generation.txt', model=FAST_MODEL)
     chat.append(chat_user(f"User Context: {user_context}\nProduct Context: {prod_context}"))
     response = chat.sample()
     response = response.content.strip(' \n\t')
