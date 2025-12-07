@@ -9,8 +9,15 @@ from typing import List, Optional, Sequence
 from urllib.parse import quote
 from concurrent.futures import ThreadPoolExecutor, Future
 
-from PySide6.QtCore import Qt, QUrl, QTimer
-from PySide6.QtGui import QCloseEvent, QDesktopServices, QKeyEvent, QPainter, QColor
+from PySide6.QtCore import Qt, QUrl, QTimer, QEasingCurve, QPoint, QPropertyAnimation
+from PySide6.QtGui import (
+    QCloseEvent,
+    QDesktopServices,
+    QKeyEvent,
+    QPainter,
+    QColor,
+    QWheelEvent,
+)
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
@@ -207,6 +214,14 @@ class ScrollWindow(QMainWindow):
         self._ui_update_timer.setInterval(100)  # 100ms for smooth updates
         self._ui_update_timer.timeout.connect(self._update_watch_time_display)
         self._ui_update_timer.start()
+
+        # Smooth scroll / wheel handling
+        self._scroll_accumulator: float = 0.0
+        # Typical mouse-step is 120; trackpads emit smaller deltas at higher
+        # frequency, so we pick a moderate multiple as the threshold.
+        self._scroll_threshold: float = 360.0
+        self._is_animating_scroll: bool = False
+        self._scroll_animation: Optional[QPropertyAnimation] = None
 
         # Start polling for completion of any background ad-generation tasks.
         self._ad_poll_timer.start()
@@ -603,6 +618,42 @@ class ScrollWindow(QMainWindow):
             return
         super().keyPressEvent(event)
 
+    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
+        """Use trackpad / mouse wheel to smoothly navigate between videos.
+
+        We accumulate fine-grained scroll deltas until a threshold is crossed,
+        then trigger an animated transition to the next or previous video.
+        """
+        if not self.video_states or self._is_animating_scroll:
+            event.ignore()
+            return
+
+        # angleDelta().y() is positive when scrolling up, negative when
+        # scrolling down on most systems. We interpret "scroll down" as
+        # moving to the next video.
+        delta_y = event.angleDelta().y()
+        if delta_y == 0:
+            event.ignore()
+            return
+
+        self._scroll_accumulator += delta_y
+
+        if self._scroll_accumulator <= -self._scroll_threshold:
+            # Scroll down → next video
+            self._scroll_accumulator = 0.0
+            self._go_next(animated=True)
+            event.accept()
+            return
+
+        if self._scroll_accumulator >= self._scroll_threshold:
+            # Scroll up → previous video
+            self._scroll_accumulator = 0.0
+            self._go_prev(animated=True)
+            event.accept()
+            return
+
+        event.accept()
+
     def resizeEvent(self, event) -> None:  # noqa: N802
         """Keep the central phone card iPhone-like and responsive."""
         super().resizeEvent(event)
@@ -736,7 +787,21 @@ class ScrollWindow(QMainWindow):
         # Start generating the next ad now that we've used one
         self._ensure_ad_queued()
 
-    def _go_next(self) -> None:
+    def _go_next(self, animated: bool = False) -> None:
+        """Navigate to the next video, optionally with a smooth slide animation."""
+        if animated:
+            self._start_scroll_animation(direction=1, step_callback=self._go_next_impl)
+        else:
+            self._go_next_impl()
+
+    def _go_prev(self, animated: bool = False) -> None:
+        """Navigate to the previous video, optionally with a smooth slide animation."""
+        if animated:
+            self._start_scroll_animation(direction=-1, step_callback=self._go_prev_impl)
+        else:
+            self._go_prev_impl()
+
+    def _go_next_impl(self) -> None:
         self._frame_check_timer.stop()
         self._commit_watch_time()
         self.current_index = (self.current_index + 1) % len(self.video_states)
@@ -745,11 +810,73 @@ class ScrollWindow(QMainWindow):
             self._organic_views_since_last_ad += 1
             self._maybe_insert_ad_after_current()
 
-    def _go_prev(self) -> None:
+    def _go_prev_impl(self) -> None:
         self._frame_check_timer.stop()
         self._commit_watch_time()
         self.current_index = (self.current_index - 1) % len(self.video_states)
         self._load_current_video()
+
+    def _start_scroll_animation(self, direction: int, step_callback) -> None:
+        """Slide the video up/down and swap videos mid-transition.
+
+        The surrounding phone frame, footer, and buttons remain fixed so the
+        UI chrome does not animate on every video change.
+        """
+        if len(self.video_states) <= 1:
+            step_callback()
+            return
+
+        target = getattr(self, "video_widget", None)
+        if target is None or target.parentWidget() is None:
+            step_callback()
+            return
+
+        if self._is_animating_scroll:
+            return
+
+        self._is_animating_scroll = True
+        self._scroll_accumulator = 0.0
+
+        parent = target.parentWidget()
+        start_pos = target.pos()
+        # Use the visible height of the container as the scroll distance.
+        offset = parent.height() + 40
+
+        if direction > 0:
+            out_end = start_pos - QPoint(0, offset)
+            in_start = start_pos + QPoint(0, offset)
+        else:
+            out_end = start_pos + QPoint(0, offset)
+            in_start = start_pos - QPoint(0, offset)
+
+        anim_out = QPropertyAnimation(target, b"pos", self)
+        anim_out.setDuration(220)
+        anim_out.setEasingCurve(QEasingCurve.InOutCubic)
+        anim_out.setStartValue(start_pos)
+        anim_out.setEndValue(out_end)
+        self._scroll_animation = anim_out
+
+        def after_out() -> None:
+            # Perform the logical navigation while the video is off-screen.
+            step_callback()
+
+            # Position the video just beyond the opposite edge and slide it in.
+            target.move(in_start)
+            anim_in = QPropertyAnimation(target, b"pos", self)
+            anim_in.setDuration(220)
+            anim_in.setEasingCurve(QEasingCurve.InOutCubic)
+            anim_in.setStartValue(in_start)
+            anim_in.setEndValue(start_pos)
+            self._scroll_animation = anim_in
+
+            def after_in() -> None:
+                self._is_animating_scroll = False
+
+            anim_in.finished.connect(after_in)
+            anim_in.start()
+
+        anim_out.finished.connect(after_out)
+        anim_out.start()
 
     # ---- Engagement handling ---------------------------------------------
 
