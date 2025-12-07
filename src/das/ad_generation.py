@@ -12,15 +12,6 @@ from das.ad_performance import AdPerformanceStore
 from das.utils import create_chat, encode_base64, generate_image
 
 
-LOGGING_COLOR_GREEN = '\033[92m'
-LOGGING_COLOR_RESET = '\033[0m'
-
-logging.basicConfig(
-    format=f'{LOGGING_COLOR_GREEN}%(levelname)s{LOGGING_COLOR_RESET}: %(message)s',
-    level=logging.INFO,
-)
-
-
 def _slugify(text: str) -> str:
     """Turn arbitrary text into a filesystem-friendly slug."""
     text = text.lower().strip()
@@ -96,14 +87,14 @@ def generate_ad(
 
     user_context = user.context  # key phrase describing the user profile
     prod_context = prod.context
-    logging.info("User Context: %s\n", user_context)
-    logging.info("Prod Context: %s\n", prod_context)
+    print("User Context: %s\n", user_context)
+    print("Prod Context: %s\n", prod_context)
 
     chat = create_chat('assets/prompts/image_generation.txt')
     chat.append(chat_user(f"User Context: {user_context}\nProduct Context: {prod_context}"))
     response = chat.sample()
     response = response.content.strip(' \n\t')
-    logging.info("Generated Ad Prompt: %s\n", response)
+    print("Generated Ad Prompt: %s\n", response)
 
     # Stable, human-readable ID based on product name and user profile key phrase.
     product_name = prod.path.stem
@@ -116,12 +107,12 @@ def generate_ad(
 
     # If we've already generated this exact ad before, reuse the cached video.
     if video_path.exists():
-        logging.info("Reusing cached ad video at %s", video_path)
+        print("Reusing cached ad video at %s", video_path)
         return Video(path=video_path, product_path=prod.path)
 
     # If the image exists but the video does not, reuse the image for video creation.
     if image_path.exists():
-        logging.info("Reusing cached ad image at %s", image_path)
+        print("Reusing cached ad image at %s", image_path)
     else:
         if edit:
             image = Image.open(prod.path)
