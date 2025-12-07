@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from das.ad_generation import collect_cached_ads
 from das.ad_generation_dataclasses import (
     Video as AdVideo,
     UserReaction,
@@ -157,8 +158,6 @@ class ScrollWindow(QMainWindow):
 
         # Preload available products once; ad generation will happen on a
         # background worker using this pool and product list.
-        self._products: List[Product] = _collect_products(Path("assets/products"))
-        print(f"[ADS] Loaded {len(self._products)} products from assets/products")
         # Cache of ready-to-insert ads.
         self._ad_cache: list[AdVideo] = []
         # Count of organic (non-ad) videos the user has scrolled through since
@@ -174,7 +173,7 @@ class ScrollWindow(QMainWindow):
         # the UI starts with a rich set of creatives even before the first
         # background generation job completes.
         cached_ads_dir = Path("assets/videos_generated")
-        cached_ads = _collect_cached_ads(cached_ads_dir, self._products)
+        cached_ads = collect_cached_ads(cached_ads_dir)
         if cached_ads:
             self._ad_cache.extend(cached_ads)
             print(
@@ -684,10 +683,6 @@ class ScrollWindow(QMainWindow):
         if self._ad_future is not None and not self._ad_future.done():
             print("[ADS] Ad generation already in progress; not queuing another.")
             return
-        if not self._products:
-            # No products available → we cannot generate ads.
-            print("[ADS] No products available; cannot queue ad generation.")
-            return
 
         # Submit a background task that rebuilds the User from stats and calls
         # generate_ad(user, products).
@@ -702,7 +697,7 @@ class ScrollWindow(QMainWindow):
         # stable view of behaviour up to this point, without re-reading JSON.
         print("[ADS][worker] Starting ad generation for current user...")
         user_snapshot = copy.deepcopy(self._user)
-        ad_video = generate_ad(user_snapshot, self._products)
+        ad_video = generate_ad(user_snapshot)
         print(f"[ADS][worker] Ad generation completed: {ad_video.path}")
         return ad_video
 
@@ -977,63 +972,6 @@ def _collect_videos(directory: Path) -> List[Path]:
     return paths
 
 
-def _collect_products(directory: Path) -> List[Product]:
-    """Collect product images for ad generation."""
-    if not directory.exists():
-        return []
-    exts = {".png", ".jpg", ".jpeg", ".webp"}
-    products: List[Product] = []
-    for p in directory.iterdir():
-        if p.suffix.lower() in exts and p.is_file():
-            products.append(Product(path=p))
-    return products
-
-
-def _slugify_name(text: str) -> str:
-    """Mirror the slugification used for generated ad filenames."""
-    text = text.lower().strip()
-    text = re.sub(r"[^a-z0-9]+", "-", text)
-    text = text.strip("-")
-    return text or "unknown"
-
-
-def _collect_cached_ads(directory: Path, products: Sequence[Product]) -> List[AdVideo]:
-    """Collect already-generated ad videos from disk to seed the ad cache.
-
-    We also attempt to infer the originating Product from the filename so that
-    performance metrics can be correctly attributed when these cached ads are
-    shown in the UI.
-    """
-    if not directory.exists():
-        return []
-
-    # Build a lookup table from slugified product name → product.path
-    product_by_slug: dict[str, Path] = {}
-    for prod in products:
-        slug = _slugify_name(prod.path.stem)
-        product_by_slug[slug] = prod.path
-
-    exts = {".mp4", ".mov", ".m4v", ".avi", ".mkv"}
-    ads: List[AdVideo] = []
-    for p in directory.iterdir():
-        if p.suffix.lower() not in exts or not p.is_file():
-            continue
-
-        # Generated ads follow the pattern "<product-slug>__<user-profile-slug>.ext".
-        # We recover the product slug and map it back to a Product if possible.
-        stem = p.stem
-        product_slug = stem.split("__", 1)[0]
-        product_path = product_by_slug.get(product_slug)
-
-        if product_path is not None:
-            ads.append(AdVideo(path=p, product_path=product_path))
-        else:
-            # Fallback: keep the ad but without a product pointer; it will not
-            # contribute to performance metrics but is still playable.
-            ads.append(AdVideo(path=p))
-
-    random.shuffle(ads)
-    return ads
 
 
 def run_scroll_ui(video_dir: Optional[Path] = None) -> None:

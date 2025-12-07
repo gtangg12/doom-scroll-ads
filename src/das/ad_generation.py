@@ -30,6 +30,61 @@ def _slugify(text: str) -> str:
     return text or "unknown"
 
 
+def collect_cached_ads(directory: Path) -> list[Video]:
+    """Collect already-generated ad videos from disk to seed the ad cache.
+
+    We also attempt to infer the originating Product from the filename so that
+    performance metrics can be correctly attributed when these cached ads are
+    shown in the UI.
+    """
+    if not directory.exists():
+        return []
+
+    # Build a lookup table from slugified product name → product.path
+    product_by_slug: dict[str, Path] = {}
+    for prod in _products:
+        slug = _slugify(prod.path.stem)
+        product_by_slug[slug] = prod.path
+
+    exts = {".mp4", ".mov", ".m4v", ".avi", ".mkv"}
+    ads: list[Video] = []
+    for p in directory.iterdir():
+        if p.suffix.lower() not in exts or not p.is_file():
+            continue
+
+        # Generated ads follow the pattern "<product-slug>__<user-profile-slug>.ext".
+        # We recover the product slug and map it back to a Product if possible.
+        stem = p.stem
+        product_slug = stem.split("__", 1)[0]
+        product_path = product_by_slug.get(product_slug)
+
+        if product_path is not None:
+            ads.append(Video(path=p, product_path=product_path))
+        else:
+            # Fallback: keep the ad but without a product pointer; it will not
+            # contribute to performance metrics but is still playable.
+            ads.append(Video(path=p))
+
+    random.shuffle(ads)
+    return ads
+
+
+def _collect_products(directory: Path) -> list[Product]:
+    """Collect product images for ad generation."""
+    if not directory.exists():
+        return []
+    exts = {".png", ".jpg", ".jpeg", ".webp"}
+    products: list[Product] = []
+    for p in directory.iterdir():
+        if p.suffix.lower() in exts and p.is_file():
+            products.append(Product(path=p))
+    return products
+
+
+_products: list[Product] = _collect_products(Path("assets/products"))
+print(f"[ADS] Loaded {len(_products)} products from assets/products")
+
+
 def generate_ad(
     user: User,
     products: list[Product],
