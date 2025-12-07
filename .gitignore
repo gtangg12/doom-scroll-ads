@@ -215,3 +215,6 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+assets/videos/
+assets/msrvtt_train9k_captions.csv

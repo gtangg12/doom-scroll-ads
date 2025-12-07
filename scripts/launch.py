@@ -17,6 +17,7 @@ def main() -> None:
             "Optional directory containing videos to scroll through. "
             "If omitted, you will be prompted to choose one."
         ),
+        default="assets/videos",
     )
     args = parser.parse_args()
 
